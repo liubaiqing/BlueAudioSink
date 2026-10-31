@@ -84,6 +84,8 @@ namespace SinkLite.Core
         private Thread controlThread;
         private Thread audioThread;
         private Thread playoutThread;
+        private WifiOutputOptions outputOptions = new WifiOutputOptions();
+        private long outputRevision;
         private AudioOutput output;
         private AudioOutput pendingRelease;
 
@@ -148,6 +150,17 @@ namespace SinkLite.Core
             }
         }
 
+        public void PrepareReconnect(IPEndPoint peer, string name)
+        {
+            lock(sync)
+            {
+                selectedPeer = remote = peer; remoteName = name;
+                lastAnyTicks = clock.ElapsedTicks; lastPongTicks = 0;
+                RememberPeerLocked(peer, lastAnyTicks, name);
+                detail = "正在重新探测手机";
+            }
+        }
+
         private bool AcceptSourceLocked(IPEndPoint from)
         {
             return (selectedPeer == null || SameEndpoint(selectedPeer, from)) &&
@@ -209,9 +222,11 @@ namespace SinkLite.Core
         private int rebufferPending;
         private int lastRebufferMs;
 
-        public WifiReceiver(Log log, int controlPort, int audioPort, int bufferBaseMs, int bufferMaxMs, string deviceName)
+        public WifiReceiver(Log log, int controlPort, int audioPort, int bufferBaseMs, int bufferMaxMs, string deviceName, WifiOutputOptions outputOptions = null)
         {
             this.log = log;
+            this.outputOptions = outputOptions ?? new WifiOutputOptions();
+            remoteVolume.Update(this.outputOptions.VolumePercent, this.outputOptions.Exclusive);
             this.controlPort = controlPort;
             this.audioPort = audioPort;
             baseMs = Math.Clamp(bufferBaseMs, 10, 800);
@@ -230,10 +245,50 @@ namespace SinkLite.Core
             }
         }
 
+        private readonly WifiVolumeControl remoteVolume = new WifiVolumeControl();
+        private IPEndPoint volumePeer;
+        public event Action RemoteVolumeChanged;
+
+        private void HandleVolume(byte[] data, int length, WifiTransport.WifiHeader header, IPEndPoint from, long now)
+        {
+            byte[] reply; bool changed = false;
+            lock(sync)
+            {
+                if (!AcceptSourceLocked(from) || !IsCurrentEndpointLocked(from) || lastPongTicks == 0 || now - lastPongTicks > TicksFromMs(5000)) return;
+                reply = remoteVolume.Handle(data, length, header, from.ToString(), out var requested);
+                if (reply == null) return;
+                volumePeer = from;
+                if (requested.HasValue)
+                {
+                    outputOptions = new WifiOutputOptions(outputOptions.Exclusive, requested.Value, outputOptions.EndpointId);
+                    outputRevision++;
+                    if(output != null) output.VolumePercent = requested.Value;
+                    changed = true;
+                }
+            }
+            SendControlPacket(reply, from);
+            if(changed) RemoteVolumeChanged?.Invoke();
+        }
+
+        public void SetOutputOptions(WifiOutputOptions options)
+        {
+            lock(sync)
+            {
+                bool rebuild=!outputOptions.SameDeviceAndMode(options);
+                bool notify = remoteVolume.Update(options.VolumePercent, options.Exclusive, outputOptions.EndpointId != options.EndpointId);
+                outputOptions=options;outputRevision++;
+                if(notify && volumePeer != null && AcceptSourceLocked(volumePeer) && IsCurrentEndpointLocked(volumePeer))
+                    SendControlPacket(remoteVolume.State(), volumePeer);
+                if(output!=null)output.VolumePercent=options.VolumePercent;
+                if(rebuild)RefreshOutput();
+            }
+        }
+
         public void RefreshOutput()
         {
             lock (sync)
             {
+                outputRevision++;
                 DetachOutputLocked();
                 playing = false;
                 rebuffering = false;
@@ -489,6 +544,10 @@ namespace SinkLite.Core
                     break;
                 case WifiTransport.TypeHello:
                     HandleHello(data, length, from, now);
+                    break;
+                case WifiTransport.TypeVolumeGet:
+                case WifiTransport.TypeVolumeSet:
+                    HandleVolume(data, length, header, from, now);
                     break;
                 case WifiTransport.TypeOffer:
                     // 自己广播回来的 OFFER，忽略。
@@ -901,20 +960,22 @@ namespace SinkLite.Core
 
         private void OpenOutput()
         {
-            AudioOutput created = new AudioOutput(log);
+            WifiOutputOptions preferences;long revision;
+            lock(sync){preferences=outputOptions;revision=outputRevision;}
+            AudioOutput created = new AudioOutput(log,preferences);
             bool ok = created.EnsureInitialized();
 
             lock (sync)
             {
-                if (ok && output == null && state != SinkState.Faulted && state != SinkState.Armed)
+                if (ok && revision == outputRevision && running && output == null && state != SinkState.Faulted && state != SinkState.Armed)
                 {
                     output = created;
                     created = null;
                 }
-                else if (!ok)
+                else if (!ok && revision == outputRevision)
                 {
                     state = SinkState.Faulted;
-                    detail = "音频输出不可用";
+                    detail = created.FailureReason ?? "音频输出不可用";
                 }
             }
 
@@ -926,6 +987,7 @@ namespace SinkLite.Core
 
         private bool ProcessLocked(long now)
         {
+            if(output?.PlaybackError!=null){state=SinkState.Faulted;detail=output.PlaybackError;}
             if (state == SinkState.Faulted)
             {
                 DetachOutputLocked();
@@ -971,10 +1033,11 @@ namespace SinkLite.Core
             output.TargetMs = targetMs;
             MoveFramesToOutputLocked(queue.Count);
             if (draining) output.EndInput();
-            if (!playing && (output.BufferedMs >= targetMs || (draining && output.BufferedMs > 0)))
+            if (!playing && (output.BufferedMs >= Math.Max(targetMs,output.MinimumStartBufferMs) || (draining && output.BufferedMs > 0)))
             {
                 output.Play();
-                playing = true;
+                if(output.PlaybackError!=null){state=SinkState.Faulted;detail=output.PlaybackError;return false;}
+                playing = output.IsPlaying;
                 log.Info("Wifi.Playing", ("bufferMs", DepthLocked()));
             }
             if (playing)
@@ -1417,7 +1480,7 @@ namespace SinkLite.Core
                     int ageUs = unchecked((int)(nowUs - lastTimestampUs)) + clockOffsetUs;
                     if (ageUs >= 0 && ageUs <= 2000000)
                     {
-                        latencyMs = ageUs / 1000.0 + 50.0;
+                        latencyMs = ageUs / 1000.0 + (output?.PlaybackLatencyMs ?? 50);
                     }
                 }
 
@@ -1425,11 +1488,18 @@ namespace SinkLite.Core
                 snapshot.Enabled = true;
                 snapshot.LastAudioAgeMs = lastAudioTicks == 0 ? double.NaN : ToMilliseconds(now - lastAudioTicks);
                 snapshot.ControlAgeMs = lastPongTicks == 0 ? double.NaN : ToMilliseconds(now - lastPongTicks);
-                snapshot.HasAudibleSignal = lastSignalTicks != 0 && now - lastSignalTicks < TicksFromMs(1200);
+                snapshot.HasAudibleSignal = outputOptions.VolumePercent > 0 && lastSignalTicks != 0 && now - lastSignalTicks < TicksFromMs(1200);
                 snapshot.OutputActive = playing && !rebuffering && output != null && output.IsPlaying;
                 snapshot.Draining = draining;
                 snapshot.Recovering = rebuffering;
                 snapshot.OutputName = output == null ? null : output.OutputName;
+                snapshot.OutputMode = output?.Mode ?? AudioOutputMode.None;
+                snapshot.OutputFormat = output?.OutputFormat;
+                snapshot.OutputBufferMs = output?.PlaybackLatencyMs ?? 0;
+                snapshot.EffectivePrefillMs = Math.Max(targetMs,output?.MinimumStartBufferMs ?? 0);
+                snapshot.OutputFallbackReason = output?.FallbackReason;
+                snapshot.ExclusiveRequested = outputOptions.Exclusive;
+                snapshot.VolumePercent = outputOptions.VolumePercent;
                 snapshot.State = state;
                 snapshot.Detail = detail;
                 snapshot.Remote = remote == null ? null : remote.ToString();

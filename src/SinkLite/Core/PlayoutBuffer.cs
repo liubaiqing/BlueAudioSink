@@ -60,6 +60,7 @@ namespace SinkLite.Core
         public long MaxInputZeroRunFrames { get; private set; }
         public int BufferedMs { get { lock (sync) { return (int)pcm.BufferedDuration.TotalMilliseconds; } } }
         public bool Recovering { get { lock (sync) { return recovering; } } }
+        public bool Draining { get { lock (sync) { return draining; } } }
         public int TargetMs { set { lock (sync) { targetMs = Math.Clamp(value, 10, 800); } } }
 
         public void Add(byte[] data, int offset, int count)

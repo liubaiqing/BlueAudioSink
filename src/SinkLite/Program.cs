@@ -51,9 +51,9 @@ namespace SinkLite
                             IntPtr existing = Win32.FindWindow("BlueAudioSinkMainWindow", null);
                             if (existing != IntPtr.Zero)
                             {
-                                Win32.ShowWindow(existing, Win32.SW_RESTORE);
-                                Win32.ShowWindow(existing, Win32.SW_SHOW);
-                                Win32.SetForegroundWindow(existing);
+                                Win32.GetWindowThreadProcessId(existing, out uint processId);
+                                Win32.AllowSetForegroundWindow(processId);
+                                Win32.PostMessage(existing, SinkLite.Platform.TrayIcon.RestoreMessage, IntPtr.Zero, IntPtr.Zero);
                                 return 0;
                             }
                             Thread.Sleep(100);
@@ -265,16 +265,10 @@ namespace SinkLite
                     window.ShowWindow();
                     log.Info("Window.Starting", ("devices", controller.Devices.Count), ("mode", wifiStart ? "wifi" : "bluetooth"));
 
-                    // 先显示窗口，再发起自动连接：连接过程不占用首帧时间。
-                    // Wi-Fi 模式下不自动连接蓝牙，两种模式互斥。
-                    if (!wifiStart && settings.AutoConnect)
-                    {
-                        string target = string.IsNullOrEmpty(settings.DeviceId) ? null : settings.DeviceId;
-                        controller.RequestConnect(target);
-                        log.Info("Window.AutoConnectRequested", ("device", string.IsNullOrEmpty(target) ? "(第一个可用)" : target));
-                    }
+                    // 只在主窗口统一执行当前模式的启动偏好。
+                    window.ApplyAutoConnect(options.Wifi);
 
-                    // 标准消息循环：窗口即全部界面，不再有托盘窗口需要分发
+                    // 主窗口统一处理界面与托盘消息。
                     Win32.MSG msg;
                     while (Win32.GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
                     {

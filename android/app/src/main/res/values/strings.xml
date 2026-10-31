@@ -52,4 +52,7 @@
     <string name="error_recorder_start">音频采集启动失败</string>
     <string name="error_recorder_read">音频采集中断</string>
     <string name="developer_credit">开发作者：liubaiqing</string>
+    <string name="pc_receive_volume">电脑接收音量</string>
+    <string name="pc_volume_disconnected">连接电脑后可调节</string>
+    <string name="pc_volume_waiting">等待同步，请确认电脑端已更新</string>
 </resources>

@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.update
  *
  * 协议裁决：PING 由 PC 发起，手机只回 PONG。
  * 因此「已连接」的判据是「最近 5 秒收到过 PC 的 PING」；
- * 丢包率是控制通道（PING）丢失率；RTT 由 PC 计算并显示在 PC 界面（手机端无回传通道）。
+ * 丢包率是控制通道（PING）丢失率；RTT 由 PC 计算并显示在 PC 界面（音量状态不携带 RTT）。
  */
 object LinkController : UdpSender.Listener {
 
@@ -137,6 +137,7 @@ object LinkController : UdpSender.Listener {
             ?: _state.value.savedDevices.firstOrNull { it.ip == host }?.name
         _state.update {
             it.copy(
+                pcConnected = false,
                 targetIp = host,
                 targetPort = audioPort,
                 targetName = knownName ?: host,
@@ -157,6 +158,7 @@ object LinkController : UdpSender.Listener {
         _state.update {
             it.copy(
                 phase = LinkPhase.IDLE,
+                pcConnected = false,
                 targetIp = null,
                 targetName = null,
                 rttMs = -1,
@@ -205,11 +207,10 @@ object LinkController : UdpSender.Listener {
         }
         streaming = true
         pendingPackets = 0
-        lastPingAtMs = 0
         pingReceived = 0
         pingMissed = 0
         _state.update {
-            it.copy(phase = LinkPhase.STREAMING, packetsSent = 0, rttMs = -1, lossPermille = 0)
+            it.copy(phase = LinkPhase.STREAMING, pcConnected = pingFresh(), packetsSent = 0, rttMs = -1, lossPermille = 0)
         }
         udp.sendHello(name.ifBlank { deviceName })
         udp.sendStart()
@@ -221,7 +222,7 @@ object LinkController : UdpSender.Listener {
         streaming = false
         pendingPackets = 0
         _state.update {
-            it.copy(phase = if (pingFresh()) LinkPhase.CONNECTED else LinkPhase.IDLE)
+            it.copy(phase = if (pingFresh()) LinkPhase.CONNECTED else LinkPhase.IDLE, pcConnected = pingFresh())
         }
         releaseSocketIfIdle()
     }
@@ -277,9 +278,16 @@ object LinkController : UdpSender.Listener {
                     hasTarget -> LinkPhase.CONNECTED
                     else -> LinkPhase.IDLE
                 },
+                pcConnected = hasTarget,
                 lossPermille = lossPermille(),
             )
         }
+    }
+
+    fun setRemoteVolume(percent: Int) { sender?.setRemoteVolume(percent) }
+
+    override fun onRemoteVolume(percent: Int?, ready: Boolean) {
+        _state.update { it.copy(remoteVolume = percent, remoteVolumeReady = ready) }
     }
 
     override fun onError(message: String) {
@@ -350,6 +358,7 @@ object LinkController : UdpSender.Listener {
     private fun releaseSocketIfIdle() {
         if (streaming || discoveryActive) return
         sender?.close()
+        _state.update { it.copy(pcConnected = false, phase = LinkPhase.IDLE) }
         sender = null
         stopWatchdog()
     }
@@ -364,8 +373,8 @@ object LinkController : UdpSender.Listener {
                 } catch (_: InterruptedException) {
                     break
                 }
-                if (!streaming && lastPingAtMs > 0 && !pingFresh()) {
-                    _state.update { it.copy(phase = LinkPhase.IDLE) }
+                if (lastPingAtMs > 0 && !pingFresh()) {
+                    _state.update { it.copy(pcConnected = false, phase = if (streaming) LinkPhase.STREAMING else LinkPhase.IDLE) }
                 }
             }
         }, "link-watchdog").apply {

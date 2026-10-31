@@ -15,6 +15,13 @@ namespace SinkLite.Core
     internal sealed class WifiSnapshot
     {
         public bool Enabled { get; set; }
+        public AudioOutputMode OutputMode { get; set; }
+        public string OutputFormat { get; set; }
+        public int OutputBufferMs { get; set; }
+        public int EffectivePrefillMs { get; set; }
+        public string OutputFallbackReason { get; set; }
+        public bool ExclusiveRequested { get; set; }
+        public int VolumePercent { get; set; } = 100;
 
         public SinkState State { get; set; } = SinkState.Idle;
 
@@ -87,6 +94,7 @@ namespace SinkLite.Core
         private readonly Log log;
         private readonly object sync = new object();
         private readonly int audioPort;
+        private WifiOutputOptions outputOptions;
         private int bufferBaseMs;
         private int bufferMaxMs;
         private readonly string deviceName;
@@ -102,9 +110,10 @@ namespace SinkLite.Core
         private DateTime lastOfferLog = DateTime.MinValue;
         private DateTime lastOfferErrorLog = DateTime.MinValue;
 
-        public WifiController(Log log, int audioPort, int bufferBaseMs, int bufferMaxMs)
+        public WifiController(Log log, int audioPort, int bufferBaseMs, int bufferMaxMs, WifiOutputOptions outputOptions = null)
         {
             this.log = log;
+            this.outputOptions = outputOptions ?? new WifiOutputOptions();
             this.audioPort = audioPort;
             this.bufferBaseMs = bufferBaseMs;
             this.bufferMaxMs = bufferMaxMs;
@@ -132,6 +141,8 @@ namespace SinkLite.Core
         /// 绑定 45678/45679 并启动接收器。返回 false 表示端口不可用；
         /// 此时不会启动 OFFER/PING，调用方应保持蓝牙模式。
         /// </summary>
+        public event Action RemoteVolumeChanged;
+
         public bool Start()
         {
             lock (sync)
@@ -148,8 +159,9 @@ namespace SinkLite.Core
                     audioPort,
                     bufferBaseMs,
                     bufferMaxMs,
-                    deviceName);
+                    deviceName,outputOptions);
 
+                created.RemoteVolumeChanged += () => RemoteVolumeChanged?.Invoke();
                 if (!created.Start())
                 {
                     lastError = "端口 " + WifiTransport.ControlPort + "/" + audioPort + " 绑定失败";
@@ -183,6 +195,9 @@ namespace SinkLite.Core
             }
         }
 
+        public void SetOutputOptions(WifiOutputOptions options)
+        {lock(sync){outputOptions=options;receiver?.SetOutputOptions(options);}}
+
         public void RefreshOutput()
         {
             lock (sync) { if (receiver != null) receiver.RefreshOutput(); }
@@ -196,6 +211,12 @@ namespace SinkLite.Core
         public bool SelectPeer(string id)
         {
             lock (sync) { return receiver != null && receiver.SelectPeer(id); }
+        }
+
+        public void PrepareReconnect(string endpoint, string name)
+        {
+            if(System.Net.IPEndPoint.TryParse(endpoint, out var peer))
+                lock(sync) receiver?.PrepareReconnect(peer, name);
         }
 
         public bool RefreshDiscovery()
@@ -305,6 +326,7 @@ namespace SinkLite.Core
 
                 WifiSnapshot disabled = new WifiSnapshot();
                 disabled.Enabled = false;
+                lock(sync){disabled.ExclusiveRequested=outputOptions.Exclusive;disabled.VolumePercent=outputOptions.VolumePercent;disabled.TargetMs=bufferBaseMs;}
                 disabled.State = string.IsNullOrEmpty(error) ? SinkState.Idle : SinkState.Faulted;
                 disabled.Detail = string.IsNullOrEmpty(error) ? "Wi-Fi 模式未启用" : error;
                 disabled.Port = audioPort;

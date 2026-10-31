@@ -45,7 +45,7 @@ namespace SinkLite.Platform
                         options.ShowHelp = true;
                         break;
                     case "--tray":
-                        // 保留为兼容别名：现在启动即显示窗口，无托盘模式
+                        // 兼容别名：显示主窗口，关闭行为由设置中的托盘开关控制。
                         break;
                     case "--console":
                         options.Console = true;

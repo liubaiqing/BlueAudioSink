@@ -26,6 +26,9 @@ object PacketCodec {
     const val TYPE_PONG = 5
     const val TYPE_OFFER = 6
     const val TYPE_HELLO = 7
+    const val TYPE_VOLUME_GET = 8
+    const val TYPE_VOLUME_SET = 9
+    const val TYPE_VOLUME_STATE = 10
 
     // ---- flags ----
     /** 仅手机置位，表示「内容不连续」（补静音/丢帧），与网络丢包无关。 */

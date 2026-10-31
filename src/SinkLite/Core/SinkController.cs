@@ -166,7 +166,7 @@ namespace SinkLite.Core
         {
             loopCancellation = new CancellationTokenSource();
             loopTask = Task.Run(() => RunLoopAsync(loopCancellation.Token));
-            log.Info("App.Start", ("version", "0.1.0"));
+            log.Info("App.Start", ("version", "0.2.12"));
         }
 
         public void RequestConnect(string deviceId)

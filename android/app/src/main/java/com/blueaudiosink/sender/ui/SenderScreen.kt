@@ -31,6 +31,8 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Slider
+import kotlin.math.roundToInt
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -80,6 +82,7 @@ fun SenderScreen(
     onConnectManual: (String) -> Unit,
     onRemoveSaved: (String) -> Unit,
     onTierChange: (BufferTier) -> Unit,
+    onRemoteVolumeChange: (Int) -> Unit,
     onDismissMessage: () -> Unit,
     onRefreshDiscovery: () -> Unit,
 ) {
@@ -136,6 +139,27 @@ fun SenderScreen(
                     onRefreshDiscovery = onRefreshDiscovery,
                 )
                 TierSection(state.tier, onTierChange)
+                if (state.pcConnected) {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(stringResource(R.string.pc_receive_volume), style = MaterialTheme.typography.titleMedium)
+                                Text(state.remoteVolume?.let { "$it%" } ?: "—", color = MaterialTheme.colorScheme.primary)
+                            }
+                            Slider(
+                                value = (state.remoteVolume ?: 0).toFloat(),
+                                onValueChange = { onRemoteVolumeChange(it.roundToInt()) },
+                                valueRange = 0f..100f,
+                                enabled = state.remoteVolumeReady,
+                                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "电脑接收音量" },
+                            )
+                            if (!state.remoteVolumeReady) Text(
+                                stringResource(if (state.targetIp == null) R.string.pc_volume_disconnected else R.string.pc_volume_waiting),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
                 PrimaryButton(state, onStart, onStop)
             }
             StatsBar(state)

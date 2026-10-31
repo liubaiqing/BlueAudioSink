@@ -1,283 +1,96 @@
-> 电脑端界面与状态呈现已更新：以 [10-desktop-ux.md](10-desktop-ux.md) 为准。下方旧版 UI 排布仅作历史说明。
+# 电脑端实现规格
 
-> 2026-10-30 播放行为按协议 v1.2 更新；历史 seq 表和旧验收数据请以协议修订与修复报告为准。
+## 界面与设置
 
-# PC 端实现（Wi-Fi 模式）
+默认窗口 520×500 DIP，最小外框 480×500 DIP，支持 DPI 缩放与按需双缓冲重绘。顶部蓝牙、Wi-Fi、设置导航仅当前可见页高亮。进入设置不切换模式；顶部模式按钮返回主页，Escape 退出设置，无额外返回按钮。设置区采用约 88 DIP 窄侧栏（常规、连接设备、网络、快捷键、关于）与右侧内容，侧栏以浅色选中背景和细色条指示当前页，不再堆叠横向分类按钮；窗口不扩宽。
 
-> 对应协议：`docs/02-protocol.md` v1.1（5 ms / 960 字节 / 200 包每秒）。
-> 本文只描述 PC 端实现，不改变协议；与 01/02 冲突时以文档为准。
-> 最后更新：2026-10-30。
+主页显示连接状态、手机和输出设备；Wi-Fi 核心指标为网络往返、缓冲与最近 10 秒丢包率，细节按需展开。输出和手机选择仅在设置内编辑。
 
-## 1. 范围与文件
+- 常规：播放设备、开机启动、关闭时缩小到托盘、自动连接（两种模式共用）、Wi-Fi 预缓冲（80/120/160 ms）、日志目录。
+- 连接设备：右侧以紧凑文字标签切换蓝牙/Wi-Fi 手机列表，每页 5 台，单页时不显示分页控件。蓝牙记住首选已配对手机；Wi-Fi 候选最多 32 台，仅本次模式会话有效，选择后锁定来源并清空旧队列/统计。选择不代替手机端授权和开始发送。
+- 网络：正常收音无需配置；无法收音时用户可尝试放行，或移除本程序规则、重新检测。保留操作结果，不常驻大段说明。
 
-| 文件 | 职责 |
-| --- | --- |
-| `src/SinkLite/Core/WifiTransport.cs` | 协议常量、16 字节包头编解码、OFFER / PONG 组包、UTF-8 截断 |
-| `src/SinkLite/Core/WifiReceiver.cs` | 绑定 45678/45679、双接收线程、会话/seq/缺口、抖动缓冲 D、PING/PONG、统计、播放调度 |
-| `src/SinkLite/Core/AudioOutput.cs` | `BufferedWaveProvider`（1000 ms）+ `WasapiOut`（共享 50 ms）、静音/淡入、丢弃最旧、播放器生命周期 |
-| `src/SinkLite/Core/WifiController.cs` | Wi-Fi 模式生命周期、端口绑定结果、OFFER 定时器、UI 快照 |
-| `src/SinkLite/Ui/MainWindow.cs` | 顶部「蓝牙 / Wi-Fi」切换、Wi-Fi 页面绘制、模式互斥与切换顺序 |
-| `src/SinkLite/Platform/Settings.cs` | `Mode` / `WifiPort` / `BufferBaseMs` / `BufferMaxMs` |
-| `src/SinkLite/Platform/Cli.cs` | `--wifi` 参数 |
-| `src/SinkLite/Program.cs` | 启动模式选择；Wi-Fi 启动时不做蓝牙自动连接 |
-| `src/SinkLite/Platform/Log.cs` | 增加 uint 数字字段输出（协议 ts/seq 不变成字符串） |
+常规页在原尺寸内采用单行启动偏好，三个开关均可 Tab 聚焦、Enter/Space 操作，显示焦点。移除常驻功能解释和设备页底部说明；解释改为控件悬停约 550ms 后显示的自动换行提示，鼠标离开、点击、切页或窗口失焦即消失。提示限制在窗口内，Tab 聚焦后 F1 可显示同样帮助，Escape 先关闭提示。缓冲和防火墙标题提供小型问号提示标记。网络状态、实际错误、规则移除结果仍直接显示，不隐藏在悬停内。版本、作者、项目地址与MIT许可集中在“关于”，其他页面底部只显示短暂操作反馈。
 
-**未改动**：`Core/SinkController.cs`（蓝牙状态机一行未动）、`android/`、`docs/00/01/02`、根目录文件。
+## 控件边缘绘制
 
-## 2. 线程模型
+圆角填充、描边、开关圆点及状态圆点采用局部覆盖率抗锯齿，输出预乘 Alpha 的32位DIB，通过原生AlphaBlend合成到现有GDI双缓冲；文字仍按原方式绘制。仅轮廓边缘做4×4子像素采样，内部直接填充，不对整窗超采样、不增加动画或刷新定时器、不引入WindowsDesktop或额外图形运行时
 
-```
-UI 线程（Win32 消息循环，1 s 定时器）
-  └─ WifiController.Current → WifiReceiver.GetSnapshot（短锁）
+按物理像素尺寸、圆角、描边厚度和颜色缓存位图，命中后只合成；缓存最多128项/8MiB，达到上限释放旧缓存，DPI改变与窗口退出时释放位图/DC。资源创建或合成失败回退现有GDI，避免界面控件缺失。圆角参数保持现有几何尺寸，交互命中区域不变
 
-WifiReceiver
-  ├─ WifiControl 线程：recvfrom 45678（HELLO/START/STOP/PONG/PING/OFFER）
-  ├─ WifiAudio   线程：recvfrom 45679（AUDIO，实际实现也兼容控制包）
-  ├─ WifiPlayout 线程：每 5 ms 调度一帧；500 ms 调整 D；1 s 聚合日志；5 s Wifi.Stats；2 s PING
-  └─ AudioOutput → WasapiOut 自带播放线程
-```
+## Wi-Fi 输出模式与音量
 
-约束：
+设置常规页的播放卡片提供 WASAPI 独占输出（默认关闭），蓝牙模式禁用并通过悬停解释；蓝牙仍由 Windows AudioPlaybackConnection 播放。Wi-Fi 软件音量默认 100%，对共享、独占及共享回退均生效；从共享请求切到独占时音量强制置 0%，更换独占输出设备时也置 0%，用户用减/加按钮每次 5% 调整。停止后保留用户音量；关闭独占不自动提高音量。软件增益仅降低，100% PCM 不变，运行中增益以最多 5ms 平滑过渡。
 
-- 三个接收/播放线程都是后台线程；`running=false` + 关闭 socket 让阻塞的 `ReceiveFrom` 返回。
-- 所有会话状态、队列、统计都在 `WifiReceiver.sync` 下；锁内不做 socket I/O、不做播放器创建/释放。
-- **播放器打开和释放都在锁外执行**。WasapiOut 的 `Init/Stop/Dispose` 在部分设备上可能阻塞数百毫秒到数秒；若持锁会卡住 UDP 接收线程，实测会导致开场丢失整段音频。
-- `GetSnapshot` 只返回不可变对象，不把队列/播放器引用交给 UI。
-- 音频帧从 `ArrayPool<byte>` 租用，播放/丢弃/重置时归还；每秒约 200 次 960 字节租还，不产生大对象。
+Wi-Fi 始终显式打开已选择的端点；仅未设置端点时使用默认设备。共享输出恢复使用声卡事件同步（50ms），独占使用声卡事件同步（100ms），禁止用 Sleep 轮询 CurrentPadding 驱动独占供数。独占首次播放与重缓冲至少预填 220ms，覆盖事件驱动的两块交替设备缓冲与 20ms 余量，避免扩大设备缓冲后启动反而缺数。独占首次 Read 在设备 Start 之前，按实际请求长度的两倍再保留 20ms 源数据余量，最多等待 500ms；取消立即结束，有限流排空不等待。该门控只用于启动，不在设备已运行时增加等待。实际输出缓冲与有效预填在诊断快照/悬停信息中说明，网络缓冲偏好仍保持用户设置。
 
-## 3. 端口与包处理
+独占协商 48kHz/双声道 PCM 16、24 或 32 位，仅做无损位深扩展，不自动改变采样率。初始化或开始播放失败时只尝试一次共享回退，不重复抢占；两者均失败则显示输出故障。音频快照显示实际共享/独占模式、输出格式及回退原因，设置偏好不冒充生效状态。
 
-### 3.1 绑定
+切换模式/设备需要释放旧输出、重建并重新预缓冲，可能短暂停顿；音量调整无需重建。设置变更使用代次校验，禁止过期输出实例覆盖新配置。停止发送、超时、切换到蓝牙和彻底退出释放独占；后台/托盘不改变用户选择的播放模式。独占只影响所选端点，不能承诺提升音质或降低网络延迟，其他应用可能无法通过该端点出声，Windows 会话合成器音量对独占不生效。独占开关悬停提示说明其他软件可能自动切换输出，关闭独占不会保证它们自动切回；若仍无声，需在对应软件重新选择原播放设备。关闭独占后底部显示 6 秒操作提示，不增加常驻说明或弹窗，不擅自修改其他软件设置。
 
-`WifiReceiver.Start()` 依次绑定：
+实现前的验证标准：纯 PCM 单元测试验证 0/100% 与位深转换；隔离输出后端测试覆盖独占成功、拒绝后的共享回退、全部失败、显式设备身份和资源释放；实机以软件静音测试独占初始化、播放、占用冲突及停止后释放，不改变系统总音量或手机扬声器音量。不能以初始化成功代替真实模式状态验证。
 
-| socket | 地址 | 用途 |
+## 托盘状态与操作
+
+| 状态 | 图标徽标 | 判定 |
 | --- | --- | --- |
-| control | `0.0.0.0:45678` | OFFER 广播、PING、接收 HELLO/START/STOP/PONG |
-| audio | `0.0.0.0:45679` | 接收 AUDIO |
+| 等待 | 灰色方块 | 无当前连接 |
+| 连接/准备中 | 琥珀沙漏 | 切换、连接、预缓冲或排空 |
+| 已连接/静音 | 蓝色圆环 | 链路就绪或 Wi-Fi 收到静音且输出正常 |
+| 音频活动 | 绿色播放三角 | Wi-Fi 实际有声且输出正常；蓝牙沿用现有 Flowing 观测 |
+| 中断/恢复 | 琥珀感叹号 | Wi-Fi 音频超时、中断、重缓冲或输出未就绪；蓝牙退避 |
+| 故障 | 红色叉号 | 当前模式 Faulted |
 
-任一绑定失败：关闭已绑定 socket，记录 `Wifi.BindFailed`（controlPort/audioPort/error），`WifiController.Start()` 返回 false。UI 保持蓝牙模式，不启动 OFFER/PING。
+悬停文字显示 BlueAudioSink、当前模式和状态；蓝牙 Flowing 依据系统端点观测，无法排除电脑其他应用声音，不能据此承诺手机音频已被独立确认。Wi-Fi 复用主页 ConnectionPresentation 映射，避免托盘与主页互相矛盾。
 
-### 3.2 校验
+关闭时缩小到托盘开关默认关闭，开启立即注册，关闭立即移除；关闭操作只隐藏窗口，不清空队列、不停止监听和播放。右键只有“打开主界面”“彻底退出”，恢复原页面。Shell 注册失败保持可访问窗口；Explorer 重建自动恢复注册。系统关机允许退出，所有正常退出路径移除图标并释放句柄。
 
-- 长度 < 16、magic 不符 → `malformed`；
-- AUDIO 必须总长 **976**（16 + 960），否则 `malformed`；
-- PONG 必须总长 **20**；HELLO payload 1~64 字节；
-- 未知 type → `unknown`；
-- 所有多字节字段小端；时间差用 u32 模运算。
+## Windows 集成
 
-### 3.3 端点和会话
+防火墙规则绑定当前 exe，只允许专用网络、LocalSubnet、入站 UDP 45678 与当前音频端口（默认 45679）；不改变其他规则、公共网络或系统总开关。独立提权 helper 幂等设置并回读，UI 不阻塞。移动 exe 或改端口后需重新配置。
 
-- `sessionEndpoint`：START 或待机首包 AUDIO 的源 `IP:端口`；只接受该端点的 AUDIO。
-- `remote`：最近一次有效手机报文端点；待机时作为 PING 候选。
-- 非会话端点 AUDIO → `foreign`，丢弃。
-- START 可抢占当前会话；旧队列、旧基线、旧统计清空。
-- STOP 后、下一次 START 前的 AUDIO → `late`，丢弃。
-- 收到 START 时记录 `T_start`；AUDIO 的 `timestampUs` 早于 `T_start − 100 ms` → `stale`，丢弃。
-- START 丢失：Armed 下首个合法 AUDIO 自动建会话，基线取该包 seq，不做 `T_start` 过滤。
+图标源为 Android drawable/ic_launcher.xml，Windows 内嵌多尺寸 app.ico；固定 AppUserModelID，资源变更通知 Shell。发布不引入 WindowsDesktop 运行时，保持 OutputType=Exe，自包含 x64、单文件与裁剪，保留内建 COM 互操作。
 
-## 4. seq 与丢包（协议 §7.1）
-
-维护 `expectedSeq`（首个接受的 AUDIO 令其为 `seq+1`）。收到 seq 后：
-
-```
-d = (uint32)(seq - expectedSeq)
-d == 0                 → 正常接受，expectedSeq = seq+1
-1 <= d <= 10           → 缺口：向队尾追加 d 个 5 ms 静音帧，再追加当前包；
-                          missing += d；d > 5 记 1 次断流；expectedSeq = seq+1
-d == 2^32-1            → 重复，dup++
-2^32-10 <= d <= 2^32-2 → 迟到/乱序，late++，丢弃
-其他（前向 >10）        → 重置：当前包为新基线，清队列/播放缓冲，重缓冲；
-                          resets++、discontinuities++，不计 missing
-```
-
-- 缺口静音在**入队时**追加，时间轴保持连续；播放线程不需要再按 seq 补静音。
-- 缺口 d 1~5 也补静音；断流计数只在 d>5。
-- 重置后保留会话统计（协议要求），只清抖动窗口与队列。
-- AUDIO 的 `flags.bit0` 只由手机置位；PC 只记录一次 `discontinuities` 并安排 5 ms 淡入，绝不回写 flags。
-
-## 5. 播放缓冲（v1.2，2026-10-30）
-
-以 `02-protocol.md` §6/§7 和 `08-audio-playout-fix.md` 为准。
-
-- WifiReceiver 每轮释放可用重排包并尽快送入 AudioOutput，2 ms 循环只做转交/超时/统计，不再决定 PCM 消费速率。
-- PlayoutBuffer.Read 由 WasapiOut 驱动，是唯一消费点；计实际 PaddingFrames / Underruns / Overflows。
-- 每 500 ms 只更新首次/恢复预填阈值（默认最低 80 ms），不能为调节正常队列深度插静音/裁剪。
-- 空接收队列不等于声卡欠载；Read 真正不足才恢复。恢复期间保留未消费音频，达到完整阈值后恢复。
-- 小幅乱序等待 20 ms；帧本地 FadeIn 标记确保淡入位置与实际断流包一致。
-- 容量 1 秒，溢出明确故障。STOP 正常排空与故障补零分开统计。
-
-## 6. 状态机（复用 SinkState）
-
-| 状态 | Wi-Fi 含义 | 进入 | 离开 |
-| --- | --- | --- | --- |
-| Idle | 模式关闭（切到蓝牙/退出） | `WifiController.Stop` | 重新 Start |
-| Busy | 绑定端口/切换中（短过渡） | — | 绑定成功/失败 |
-| Armed | 45678/45679 已绑定，OFFER/PING 运行，无会话 | Start 成功；STOP 排空完成；5 s 超时；重置后释放 | START/首包 AUDIO |
-| LinkReady | 预缓冲/重缓冲/排空中 | START/首包；欠载；d>10 重置；STOP | D 达标 → Flowing；排空完成 → Armed；故障 → Faulted |
-| Flowing | 已启动播放且未重缓冲（静音也算） | 预缓冲完成 | 欠载/重缓冲、STOP、超时、故障 |
-| Faulted | 端口/播放器/接收 socket 致命错误 | BindFailed/Player.Fault/ReceiveError | 下一次 START（播放器类）或用户重选 Wi-Fi（端口类） |
-| Backoff | Wi-Fi 不使用 | — | — |
-
-- STOP/超时回 **Armed**，不是 Idle；socket 与 OFFER/PING 保留。
-- Flowing 不用峰值判定；手机发静音包时仍为 Flowing。
-- UI 映射：Armed「等待手机连接」、LinkReady「正在缓冲」、Flowing「正在接收 Wi-Fi 音频」、Faulted「Wi-Fi 故障」。
-
-## 7. PING/PONG 与延迟
-
-- PC 每 2 秒从 **45678** socket 向 `sessionEndpoint ?? remote` 发 PING；条件是最近 10 秒内收到过该手机任意合法报文，且状态非 Faulted。
-- PING：`seq=0`，`timestampUs=T1`（PC Stopwatch 微秒低 32 位）。
-- 手机 PONG：payload = 原样回填 T1；header.timestampUs = T2（手机发送时刻）。
-- PC 收到 PONG：
-  - 校验源端点、payload == 最近一次 PING 的 T1；
-  - `RTT = u32(T3 − T1)`，仅接受 `0 < RTT ≤ 2,000,000 µs`；
-  - `offset(手机−PC) = (int32)(T2 − T1 − RTT/2)`；
-  - 记录 `Pong.Recv`（rttMs、offsetMs）。
-- 延迟显示（仅展示）：
-  ```
-  age = (int32)(nowPC − lastAudioTimestampUs) + offset
-  显示延迟 = age/1000 + 50 ms
-  ```
-  仅当 Flowing、offset 有效、最近 10 秒有 PONG、`0 ≤ age ≤ 2 s` 时显示；否则 `—`。
-- RTT/offset 在会话重置/回 Armed 时清空；PING 在 Armed 仍运行，因此可重新获得样本。
-
-## 8. 播放器与格式
-
-- `AudioOutput` 构造 `PlayoutBuffer(48000,16,2)`，容量 1 s；底层 ReadFully=false，真实补零由 Read 包装层计数。
-- `WasapiOut(AudioClientShareMode.Shared, 50)` 打开**默认输出端点**；`Init` 不 `Play`，预填后再 `Play`。
-- 事件：`Player.Created`（format/latencyMs/bufferMs）、`Player.Released`、`Player.Fault`。
-- 播放器打开失败 → `Faulted`，停止 PING；下一次 START 重试。
-- 打开/释放都在接收锁外；释放经 `pendingRelease` 交给播放线程在下一轮锁外 `Dispose`。
-
-## 9. UI 与模式切换
-
-### 9.1 UI 路径
-
-1. 启动 `BlueAudioSink.exe` → 主窗口右上角「蓝牙 / Wi-Fi」。
-2. 点「Wi-Fi」→ 绑定 45678/45679 成功后释放蓝牙；页面显示：
-   - 标题/圆点：等待手机连接 / 正在缓冲 / 正在接收 Wi-Fi 音频 / Wi-Fi 故障；
-   - 手机端点与设备名、本机 IP、音频端口、发现广播端口；
-   - RTT、缓冲深度 D / lastTarget、估算延迟、丢包率（10 秒窗口，无包显示「—」）；
-   - 缓冲条、收包/丢包/断流/欠载/溢出丢弃计数；
-   - 提示文案。
-3. 点「蓝牙」→ 先停 Wi-Fi 播放器并关闭 45678/45679，再走既有蓝牙连接流程。
-
-### 9.2 切换顺序
-
-- **蓝牙 → Wi-Fi**：先 `wifi.Start()` 绑定 45678/45679；成功后才 `controller.RequestDisconnect()`；绑定失败保持蓝牙不变（`Wifi.BindFailed`）。
-- **Wi-Fi → 蓝牙**：先 `wifi.Stop("bluetooth")`（释放播放器、关闭 socket、停 OFFER/PING），再 `controller.RequestConnect(...)`。
-- Wi-Fi 播放器只在 START/首包后创建，所以“绑定成功但蓝牙尚未释放”的过渡期不会双重出声。
-
-### 9.3 设置与 CLI
-
-- 设置文件：`%LocalAppData%\BlueAudioSink\settings.ini`
-  `mode=wifi|bluetooth`、`wifiport=45679`、`bufferbasems=80`、`buffermaxms=200`。
-- `--wifi`：直接以 Wi-Fi 模式启动（覆盖 settings.Mode）；启动后仍显示主窗口，可切回蓝牙。
-- 无参数启动读取 `mode`；若 `mode=wifi` 则启动即 Wi-Fi。
-- 单实例互斥仍生效：已有实例运行时第二个 `--wifi` 直接退出。
-
-## 10. 日志事件（与 01 §11 对齐）
-
-PC 端输出（JSONL，`%LocalAppData%\BlueAudioSink\logs\sink-YYYYMMDD.jsonl`）：
-
-| 事件 | 关键字段 | 时机 |
-| --- | --- | --- |
-| `Wifi.ModeOn` / `Wifi.ModeOff` | mode | 模式绑定成功 / 关闭 |
-| `Wifi.Bind` / `Wifi.BindFailed` | controlPort/audioPort/error | 绑定 45678/45679 |
-| `Wifi.OfferSent` | name/audioPort | 首次 + 每 30 s |
-| `Wifi.Hello` | name/endpoint | 收到 HELLO |
-| `Wifi.Start` | endpoint/ts/auto | START 或首包自动建会话 |
-| `Wifi.FirstAudio` | seq/ts | 会话首包 |
-| `Wifi.Playing` | bufferMs | 预缓冲完成 |
-| `Wifi.Stop` / `Wifi.DrainDone` | ts / drainedMs | STOP / 排空结束 |
-| `Wifi.Timeout` | silentMs | 5 s 无 AUDIO |
-| `Wifi.Reset` | oldSeq/newSeq | d > 10 |
-| `Wifi.Fault` | code/detail | 端口/播放器/收发故障 |
-| `Player.Created` / `Player.Released` / `Player.Fault` | format/code | 播放器生命周期 |
-| `Pong.Recv` | rttMs/offsetMs | 每个有效 PONG |
-| `Audio.Gap` | missing/seq | 缺口（1 s 聚合） |
-| `Audio.Underrun` / `Audio.Rebuffer` | count / bufferMs | 欠载/重缓冲（1 s 聚合） |
-| `Packet.Malformed` | count/reason | 校验失败（1 s 聚合） |
-| `Wifi.Stats` | 见下 | 每 5 s（有会话或最近 10 s 有手机报文） |
-
-`Wifi.Stats` 字段：
-`state, rttMs, offsetMs, bufferMs, targetMs, lossPct, received, missing, dup, late, resets, underruns, discontinuities, malformed, foreign, stale, unknown`。
-
-- `lossPct` 为最近 10 秒窗口百分比；窗口无包时为 `null`。
-- `received/missing` 为窗口内计数；其余为会话累计（malformed/foreign/unknown 全局累计）。
-- 数值四舍五入：RTT/缓冲整数 ms，丢包率 2 位小数（日志）/UI 1 位。
-
-## 11. 验证方法（可复现）
-
-### 11.1 编译
+## 构建
 
 ```powershell
-dotnet build .\BlueAudioSink.sln -c Debug -p:Platform=x64
-# 期望：0 个警告，0 个错误
+dotnet publish src/SinkLite/SinkLite.csproj -c Release -p:Platform=x64 -o artifacts/pc --nologo
 ```
 
-### 11.2 端口
+正式交付入口为 artifacts/BlueAudioSink-0.2.12.exe；候选构建验证后再替换。音频协议和消费机制不随托盘状态变化。
 
-```powershell
-.\src\SinkLite\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\BlueAudioSink.exe --wifi
-Get-NetUDPEndpoint -LocalPort 45678,45679 |
-  Format-Table LocalAddress,LocalPort,OwningProcess
-# 期望：0.0.0.0:45678 与 0.0.0.0:45679 同属 BlueAudioSink
-```
+手机远程音量复用现有软件增益，主线程接收状态通知后更新常规页并保存偏好；网络线程不写配置或操作UI。远程命令只对当前手机且心跳新鲜时生效，修订冲突返回权威值，开启独占置零也递增修订并回传，详见协议文档
 
-### 11.3 日志
+## Wi-Fi 音量数值输入
 
-```powershell
-$log = Get-ChildItem "$env:LOCALAPPDATA\BlueAudioSink\logs\sink-*.jsonl" |
-       Sort-Object LastWriteTime -Descending | Select-Object -First 1
-Get-Content $log.FullName -Tail 80
-```
+常规页将Wi-Fi音量标签与可点击百分比分开，数字以蓝色和悬停背景表示可编辑。点击数字或Tab聚焦后Enter进入原位原生EDIT，支持键盘/粘贴0–100整数；Enter或移出焦点提交，Escape取消，非法值不写入，Enter非法保持编辑并提示范围。保留±5按钮，所有入口使用同一保存/同步函数。蓝牙模式不可编辑。切页前通过移焦提交，尺寸/DPI改变或手机远程音量更新时取消未提交草稿，避免旧输入覆盖新值
 
-### 11.4 无手机回环
+音量行（标签、数字和±控件）悬停/F1说明：手机与电脑共用同一Wi-Fi音量值，通过软件内部按比例乘以音频采样值，不改动Windows系统或应用合成器音量设置。共享时仍受系统合成器影响，独占仍绕过共享混音。原位编辑使用系统原生控件，不新增框架；退出和隐藏托盘前释放
 
-优先使用主 agent 的 `tools/loopback-inject.ps1`（单 socket、同源端口）：
+## 全局快捷键
 
-1. START 发 `127.0.0.1:45678`；
-2. AUDIO（960 字节）发 `127.0.0.1:45679`；
-3. 注入 7 包缺口 → 期望 `Audio.Gap missing=7`；
-4. 非法 magic → 期望 `Packet.Malformed count=1 reason=magic`；
-5. STOP → 期望 `Wifi.Stop`、`Wifi.DrainDone`（≤500 ms）、`Player.Released`；
-6. 只发 START 不发 AUDIO → 5 s 后 `Wifi.Timeout silentMs≈5000`，状态回 Armed。
+设置窄侧栏新增“快捷键”。四项为断开所有连接、重连当前模式、调高Wi-Fi音量、调低Wi-Fi音量，默认全部未绑定。点击录入组合键，支持Ctrl/Alt及可选Shift搭配字母、数字、方向键/导航键/空格、F1–F24（不含系统保留F12），不接管Win组合；Esc取消、Delete/Backspace或清除按钮移除。无需常驻长说明，帮助用悬停/F1。保存后立即生效，窗口失焦/托盘仍可用，退出注销。录入时现有全局键不执行动作，取消录入后恢复正常操作
 
-> 注意：回环脚本的所有报文必须来自**同一个 UDP socket**，否则会被端点过滤判为 `foreign`。
-> AUDIO 的 `timestampUs` 必须是手机单调时钟（与本机测试进程的 `process.hrtime`/Stopwatch 同源），且不早于 START−100 ms，否则会被判 `stale`。
+常态使用RegisterHotKey与MOD_NOREPEAT；仅在前台录入期间短暂使用WH_KEYBOARD_LL，捕获并拦下组合主键，防止被其他软件占用的组合先执行该软件动作而无法提示冲突。钩子只投递录入消息，不执行业务；取消、保存、失焦、切页、隐藏和退出均立即卸载，不记录输入历史。注册冲突只提示用户更换、保留原绑定，不自动选替代组合或改其他软件；启动注册失败在对应行显示未生效。四项内部重复也直接拒绝。配置独立四个键值，解析非法值视为未设置，修改其他设置保留绑定
 
-### 11.5 已完成的实测
+断开动作串行请求蓝牙断开并关闭Wi-Fi socket/播放器，取消蓝牙自动重试，不删除设备/音量/启动偏好。重连动作只恢复当前模式：蓝牙先释放再连接首选设备；Wi-Fi重建监听，并仅在本次运行中保留最后手机端点用于重新PING/来源锁定，不把此临时地址持久化，不能代替手机开始发送/采集授权。端点陈旧则允许用户在设备设置换机，不伪称已连上。音量两项仅Wi-Fi模式生效，0–100每次±5%，复用现有软件增益/配置及手机同步；不切换当前模式、不改系统音量
 
-- 编译：0 警告 0 错误。
-- 端口：45678/45679 均绑定 `0.0.0.0`。
-- OFFER：`Wifi.OfferSent name=LIUBAI audioPort=45679`，每 2 s。
-- 预缓冲/播放：`Player.Created format=48000/16/2`、`Wifi.Playing bufferMs=80`。
-- 缺口：`Audio.Gap missing=7 seq=12`（7 包缺口精确匹配）。
-- 非法包：`Packet.Malformed count=1 reason=magic`。
-- 排空：`Wifi.DrainDone drainedMs=9` → `Player.Released`。
-- 超时：`Wifi.Timeout silentMs=5006` → Armed。
-- PING/PONG：`Pong.Recv rttMs=0.3~11.5`、`offsetMs` 稳定；UI 显示 RTT/缓冲/延迟/丢包率。
-- 模式切换：`Wifi.ModeOff mode=bluetooth` → `Connect.Armed`；再切回 Wi-Fi 重新 `Wifi.Bind`。
+依据：Microsoft RegisterHotKey文档 https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey
 
-## 12. 已知限制 / 实现差异
+## Wi-Fi 启用与断开
 
-1. **没有独立 ModeCoordinator 类**：模式切换顺序由 `MainWindow.SetMode` 串行执行；UI 线程承担切换，未做“切换中禁用按钮/10 s 硬超时”的独立状态机。切换流程本身很快，但极端慢设备上可能阻塞 UI。
-2. **Wi-Fi 输出固定为默认端点**：`WasapiOut` 使用默认输出；蓝牙页的“输出”选择只影响蓝牙路由，不改变 Wi-Fi 播放器。会话中不跟随系统默认变化，下一次会话重新绑定（协议 §12.9）。
-3. **淡出不完整**：缺口/断流恢复做了 5 ms 淡入；缺口前最后一帧的 5 ms 淡出未实现（需要回改已入播放缓冲的数据）。静音帧本身避免爆音，属于可接受的 v1 差异。
-4. **设备格式转换依赖 NAudio**：以 48k/16/2 打开共享模式，由 NAudio/WASAPI 处理设备混音格式；若设备不支持且转换失败，`Player.Fault` + Faulted，需用户检查默认输出设备。
-5. **端点过滤较严格**：只接受当前会话端点（IP:端口）的 AUDIO；手动回环测试必须单 socket。手机换 IP/端口需重新 START。
-6. **AUDIO 也在控制 socket 上被解析**：这是为兼容/容错保留的宽松行为，正常协议仍要求 AUDIO→45679、控制→45678。
-7. **PING 目标使用当前端点原端口**：协议 v1.1 手机固定 45678，所以等价于“手机 IP:45678”；若手机未按规范绑定，PING 会发到其实际源端口。
-8. **统计窗口**：`received/missing` 按最近 10 秒窗口，其余为会话累计；`malformed/foreign/unknown` 为进程级累计。`lossPct` 以百分比输出（UI/日志），与协议公式的 0~1 比例是同一数值的百分比表示。
-9. **单实例**：已有 BlueAudioSink 运行时，`--wifi` 第二个进程直接退出；不会抢端口。
-10. **E2E 延迟未用真机复测**：当前 50 ms 为 WasapiOut 固定估算；实际端到端延迟需真机联调确认。
-11. **广播/防火墙**：OFFER 失败只记录 `Wifi.Fault code=OfferFailed`（限频）；不影响手动输入 IP 的音频接收。
-12. **蓝牙零回归**：`SinkController.cs` 未改动；`MainWindow` 仅在主页面新增模式切换与 Wi-Fi 分支，蓝牙页面绘制/连接流程保持原逻辑。
+Wi-Fi主页在三项指标卡下提供与蓝牙同规格的“启用”“断开”双按钮，34DIP高、8DIP间距。启用仅在Wi-Fi已关闭时可用，启动控制/音频socket、发现和监听；有本次运行记住的手机时重新探测并锁定该来源，等待真实PONG/AUDIO才显示已连接。断开在已启用（包括监听中）可用，立即关闭socket、发现定时器及播放器、释放独占，清空会话，不再回PING、不接受远程音量、不因后续手机包/主界面刷新自动开启。设备/音量偏好保留；应用原有启动模式偏好不变
 
-## 13. 后续可做（非本次范围）
+双按钮位于指标下328–362DIP，地址/复制/详情移至370–398DIP，展开详情采用402–432DIP两行紧凑卡，避免最小窗口遮挡操作或作者/提示区。鼠标和Tab/Enter命中与禁用状态一致。断开状态文字明确要求点击“启用”，不能再提示切换模式来恢复
 
-- 抽出 `ModeCoordinator`，把切换超时/回滚/禁用按钮集中管理。
-- 缺口前后完整淡出/淡入；用 `tailTs` 精确实现 §5.3 延迟显示。
-- Wi-Fi 输出端点选择（按 `PreferredRenderId` 打开指定 MMDevice），并与蓝牙输出选择统一。
-- 30 分钟连续播放/弱网抖动压测，回填 `docs/05-testing-acceptance.md`。
+按钮、故障重试和全局快捷键复用同一连接控制方法，重连=关闭后重新启用当前模式；“断开所有连接”额外断开蓝牙。快捷键重连悬停说明明确区分：手机仍在发送时自动恢复接收；若手机已停止发送，请在手机端点击“开始发送”。电脑不会擅自启动手机采集或获取授权
+
+## 模式记忆与统一自动连接
+
+蓝牙/Wi-Fi页面选择始终自动保存，不提供记忆开关；设置或关于子页不当作传输模式。常规中的“自动连接”沿用autoconnect键和值，默认true，对两种模式一致：关闭时启动仅恢复上次模式页面，不绑定Wi-Fi接收端口、不请求蓝牙连接；开启时启动启用所选模式的电脑连接。启动连接在窗口显示后由单一入口发起，避免重复蓝牙连接请求；Wi-Fi启用失败保留Wi-Fi页并显示错误，不悄悄切换蓝牙。显式--wifi仍作为命令行主动启用请求
+
+切换模式停止旧模式并保存新选择，按照统一自动连接开关决定是否启用新模式；关闭时仍可用主页启用/连接按钮或重连快捷键主动连接。自动连接开关修改只影响后续启动/模式切换，不突然中断当前会话；不替代手机端采集授权或开始发送
+
+## 关于页
+
+侧栏新增“关于”，使用当前软件图标、程序集版本、开发作者liubaiqing、项目地址https://github.com/liubaiqing/BlueAudioSink、MIT License、版权与Windows x64平台信息。项目主页和协议按钮用系统默认浏览器打开固定HTTPS地址，失败显示短提示。移除其他页面底部作者和侧栏重复版本；“关于”页不增加自动检查更新或网络请求，只有点击链接才打开外部页面

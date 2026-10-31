@@ -9,7 +9,8 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
-import java.util.concurrent.ExecutorService
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 
 /**
@@ -28,6 +29,7 @@ class UdpSender(context: Context) {
     interface Listener {
         fun onOffer(device: DiscoveredDevice)
         fun onPing(t1Us: Int, receivedAtUs: Int)
+        fun onRemoteVolume(percent: Int?, ready: Boolean)
         fun onError(message: String)
     }
 
@@ -37,8 +39,8 @@ class UdpSender(context: Context) {
     private val appContext = context.applicationContext
     private val sendLock = Any()
 
-    private val controlExecutor: ExecutorService =
-        Executors.newSingleThreadExecutor { runnable ->
+    private val controlExecutor: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "udp-control").apply { isDaemon = true }
         }
 
@@ -74,6 +76,23 @@ class UdpSender(context: Context) {
     /** 复用缓冲：960 payload + 16 包头，避免每包分配。 */
     private val frameBuffer = ByteArray(PacketCodec.AUDIO_PACKET_SIZE)
 
+    private val remoteVolume = RemoteVolumeClient(
+        send = { type, request, payload ->
+            synchronized(sendLock) {
+                val sock = socket
+                val address = resolveTarget()
+                if (sock != null && address != null) {
+                    val bytes = PacketCodec.build(type, request, 0, payload, payload.size)
+                    try { sock.send(DatagramPacket(bytes, bytes.size, address, PacketCodec.CONTROL_PORT)) }
+                    catch (e: Exception) { Log.w(TAG, "volume control send failed", e) }
+                }
+            }
+        },
+        changed = { percent, ready -> listener?.onRemoteVolume(percent, ready) },
+    )
+
+    fun setRemoteVolume(percent: Int) = remoteVolume.set(percent, SystemClock.elapsedRealtime())
+
     /** 绑定 45678 并开始收包。重复调用安全。 */
     fun open(): Boolean {
         if (socket != null) return true
@@ -90,6 +109,7 @@ class UdpSender(context: Context) {
             return false
         }
         socket = sock
+        controlExecutor.scheduleAtFixedRate({ remoteVolume.tick(SystemClock.elapsedRealtime()) }, 0, 100, TimeUnit.MILLISECONDS)
         running = true
         acquireMulticastLock()
         receiveThread = Thread({ receiveLoop() }, "udp-recv").apply {
@@ -104,6 +124,7 @@ class UdpSender(context: Context) {
     /** 关闭 socket；先让已排队的 STOP 发完（同一 executor 保证顺序）。 */
     fun close() {
         if (closed) return
+        remoteVolume.reset(false)
         closed = true
         running = false
         audioEnabled = false
@@ -124,13 +145,16 @@ class UdpSender(context: Context) {
     fun setTarget(host: String, port: Int): Boolean {
         val trimmed = host.trim()
         if (trimmed.isEmpty()) return false
+        val changedTarget = targetHost != trimmed
         targetHost = trimmed
         targetPort = if (port in 1..65_535) port else PacketCodec.DEFAULT_AUDIO_PORT
         cachedAddress = null
+        if (changedTarget) remoteVolume.reset(true)
         return true
     }
 
     fun clearTarget() {
+        remoteVolume.reset(false)
         targetHost = null
         targetPort = PacketCodec.DEFAULT_AUDIO_PORT
         cachedAddress = null
@@ -217,11 +241,17 @@ class UdpSender(context: Context) {
             if (!PacketCodec.isValid(buffer, length)) continue
             when (PacketCodec.typeOf(buffer, length)) {
                 PacketCodec.TYPE_OFFER -> handleOffer(packet, buffer)
-                PacketCodec.TYPE_PING -> handlePing(packet, buffer)
+                PacketCodec.TYPE_PING -> if (isSelectedPc(packet)) handlePing(packet, buffer)
+                PacketCodec.TYPE_VOLUME_STATE -> if (isSelectedPc(packet) && length == 30) {
+                    remoteVolume.receive(buffer.copyOfRange(16, 30), PacketCodec.seqOf(buffer, length), SystemClock.elapsedRealtime())
+                }
                 else -> Unit
             }
         }
     }
+
+    private fun isSelectedPc(packet: DatagramPacket): Boolean =
+        packet.port == PacketCodec.CONTROL_PORT && packet.address?.hostAddress == targetHost
 
     private fun handleOffer(packet: DatagramPacket, buffer: ByteArray) {
         val length = packet.length

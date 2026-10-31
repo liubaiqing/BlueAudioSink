@@ -14,6 +14,18 @@ namespace SinkLite.Platform
 
         public bool AutoConnect { get; set; } = true;
 
+        public bool CloseToTray { get; set; }
+
+        public HotkeyBinding[] Hotkeys { get; } = new HotkeyBinding[4];
+
+        public bool WifiExclusive { get; set; }
+        public int WifiVolume { get; set; } = 100;
+        public void SetWifiExclusive(bool enabled)
+        {
+            WifiExclusive=enabled;
+            if(enabled)WifiVolume=0;
+        }
+
         public int SampleSeconds { get; set; } = 2;
 
         /// <summary>首选输出端点 ID。非空时程序会把默认输出锁定在它上面。</summary>
@@ -71,14 +83,27 @@ namespace SinkLite.Platform
                     string value = line.Substring(eq + 1).Trim();
                     switch (key)
                     {
+                        case "hotkeydisconnect": settings.Hotkeys[0] = HotkeyBinding.Parse(value); break;
+                        case "hotkeyreconnect": settings.Hotkeys[1] = HotkeyBinding.Parse(value); break;
+                        case "hotkeyvolumeup": settings.Hotkeys[2] = HotkeyBinding.Parse(value); break;
+                        case "hotkeyvolumedown": settings.Hotkeys[3] = HotkeyBinding.Parse(value); break;
                         case "deviceid":
                             settings.DeviceId = value;
                             break;
                         case "autoconnect":
                             settings.AutoConnect = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
                             break;
+                        case "closetotray":
+                            settings.CloseToTray = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
+                            break;
                         case "preferredrenderid":
                             settings.PreferredRenderId = value;
+                            break;
+                        case "wifiexclusive":
+                            settings.WifiExclusive = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
+                            break;
+                        case "wifivolume":
+                            if(int.TryParse(value,out int volume)) settings.WifiVolume=Math.Clamp(volume,0,100);
                             break;
                         case "sampleseconds":
                             int seconds;
@@ -146,12 +171,16 @@ namespace SinkLite.Platform
                 sb.AppendLine("# BlueAudioSink 设置");
                 sb.AppendLine("deviceid=" + (DeviceId ?? string.Empty));
                 sb.AppendLine("autoconnect=" + (AutoConnect ? "1" : "0"));
+                sb.AppendLine("closetotray=" + (CloseToTray ? "1" : "0"));
+                sb.AppendLine("wifiexclusive=" + (WifiExclusive ? "1" : "0"));
+                sb.AppendLine("wifivolume=" + Math.Clamp(WifiVolume,0,100));
                 sb.AppendLine("sampleseconds=" + SampleSeconds);
                 sb.AppendLine("preferredrenderid=" + (PreferredRenderId ?? string.Empty));
                 sb.AppendLine("mode=" + (Mode ?? "bluetooth"));
                 sb.AppendLine("wifiport=" + WifiPort);
                 sb.AppendLine("bufferbasems=" + BufferBaseMs);
                 sb.AppendLine("buffermaxms=" + BufferMaxMs);
+                for(int i=0;i<4;i++) sb.AppendLine(GlobalHotkeys.SettingNames[i]+"="+Hotkeys[i].Encode());
                 File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
             }
             catch

@@ -78,6 +78,7 @@ class MainActivity : ComponentActivity() {
                     onConnectManual = { ip -> LinkController.connect(ip) },
                     onRemoveSaved = { ip -> LinkController.removeSavedDevice(ip) },
                     onTierChange = { tier -> LinkController.setTier(tier) },
+                    onRemoteVolumeChange = { LinkController.setRemoteVolume(it) },
                     onDismissMessage = { LinkController.clearMessage() },
                     onRefreshDiscovery = { LinkController.restartDiscovery(this) },
                 )

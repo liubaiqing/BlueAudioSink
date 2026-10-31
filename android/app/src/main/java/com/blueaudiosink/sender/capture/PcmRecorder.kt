@@ -24,7 +24,7 @@ import kotlin.math.abs
  * 由采集线程在读到整包时按「读取完成时刻 − 5 ms」估算后随包携带。
  */
 class PcmRecorder(
-    private val projection: MediaProjection,
+    private val projection: MediaProjection?,
     private val tier: BufferTier,
     private val onPacket: (buffer: ByteArray, length: Int, timestampUs: Int, discontinuity: Boolean) -> Unit,
     private val onError: (code: Int) -> Unit,
@@ -82,7 +82,7 @@ class PcmRecorder(
         if (running) return true
 
         val captureConfig = try {
-            AudioPlaybackCaptureConfiguration.Builder(projection)
+            AudioPlaybackCaptureConfiguration.Builder(requireNotNull(projection))
                 .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
                 .build()
@@ -115,7 +115,7 @@ class PcmRecorder(
             AudioRecord.Builder()
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(bufferBytes)
-                .setAudioPlaybackCaptureConfig(captureConfig)
+                .setAudioPlaybackCaptureConfig(requireNotNull(captureConfig))
                 .build()
         } catch (e: SecurityException) {
             Log.w(TAG, "AudioRecord permission denied", e)

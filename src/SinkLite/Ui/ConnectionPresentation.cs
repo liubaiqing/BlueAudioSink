@@ -18,11 +18,11 @@ namespace SinkLite.UI
         public static ConnectionPresentation Wifi(WifiSnapshot s)
         {
             var v = new ConnectionPresentation();
-            v.PhoneReady = !string.IsNullOrEmpty(s.Remote) &&
+            v.PhoneReady = s.Enabled && !string.IsNullOrEmpty(s.Remote) &&
                 ((!double.IsNaN(s.ControlAgeMs) && s.ControlAgeMs < 6000) ||
                  (!double.IsNaN(s.LastAudioAgeMs) && s.LastAudioAgeMs < 1000));
-            v.StreamReady = !double.IsNaN(s.LastAudioAgeMs) && s.LastAudioAgeMs < 1000;
-            v.OutputReady = s.OutputActive;
+            v.StreamReady = s.Enabled && !double.IsNaN(s.LastAudioAgeMs) && s.LastAudioAgeMs < 1000;
+            v.OutputReady = s.Enabled && s.OutputActive;
             if (s.State == SinkState.Faulted)
             {
                 v.Title = "连接遇到问题"; v.Description = s.Detail ?? "请重新进入 Wi-Fi 模式重试。"; v.Tone = ConnectionTone.Error;
@@ -33,7 +33,7 @@ namespace SinkLite.UI
             }
             else if (!s.Enabled)
             {
-                v.Title = "Wi-Fi 尚未开启"; v.Description = "切换到 Wi-Fi 即可接收手机音频。";
+                v.Title = "Wi-Fi 已断开"; v.Description = "点击「启用」，等待手机连接。";
             }
             else if (s.Draining)
             {
@@ -64,8 +64,8 @@ namespace SinkLite.UI
             }
             else
             {
-                v.Title = v.PhoneReady ? "手机已连接" : "等待手机连接";
-                v.Description = v.PhoneReady ? "在手机上点击「开始发送」。" : "手机连接同一网络，在发送端选择这台电脑。";
+                v.Title = v.PhoneReady ? "手机已连接" : "等待手机响应";
+                v.Description = v.PhoneReady ? "在手机上点击「开始发送」。" : "等待手机响应，请在手机端选择这台电脑。";
                 v.Tone = v.PhoneReady ? ConnectionTone.Ready : ConnectionTone.Neutral;
             }
             return v;

@@ -20,8 +20,8 @@ android {
         applicationId = "com.blueaudiosink.sender"
         minSdk = 29
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.0"
+        versionCode = 7
+        versionName = "0.2.4"
 
         resourceConfigurations += listOf("zh")
     }
@@ -66,6 +66,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
 

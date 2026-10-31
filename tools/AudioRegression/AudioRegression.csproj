@@ -3,12 +3,20 @@
   <ItemGroup>
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <Compile Include="../../src/SinkLite/Core/PlayoutBuffer.cs" Link="PlayoutBuffer.cs" />
+    <Compile Include="../../src/SinkLite/Core/WasapiOutputDevice.cs" Link="WasapiOutputDevice.cs" />
+    <Compile Include="../../src/SinkLite/Core/PcmOutputProviders.cs" Link="PcmOutputProviders.cs" />
     <Compile Include="../../src/SinkLite/Core/AudioOutput.cs" Link="AudioOutput.cs" />
     <Compile Include="../../src/SinkLite/Core/WifiReceiver.cs" Link="WifiReceiver.cs" />
+    <Compile Include="../../src/SinkLite/Core/WifiVolumeControl.cs" Link="WifiVolumeControl.cs" />
     <Compile Include="../../src/SinkLite/Core/WifiTransport.cs" Link="WifiTransport.cs" />
     <Compile Include="../../src/SinkLite/Core/WifiController.cs" Link="WifiController.cs" />
     <Compile Include="../../src/SinkLite/Ui/ConnectionPresentation.cs" Link="ConnectionPresentation.cs" />
+    <Compile Include="../../src/SinkLite/Ui/TrayPresentation.cs" Link="TrayPresentation.cs" />
+    <Compile Include="../../src/SinkLite/Platform/TrayIcon.cs" Link="TrayIcon.cs" />
+    <Compile Include="../../src/SinkLite/Platform/Win32.cs" Link="Win32.cs" />
     <Compile Include="../../src/SinkLite/Core/Models.cs" Link="Models.cs" />
+    <Compile Include="../../src/SinkLite/Platform/GlobalHotkeys.cs" Link="GlobalHotkeys.cs" />
+    <Compile Include="../../src/SinkLite/Platform/Settings.cs" Link="Settings.cs" />
     <Compile Include="../../src/SinkLite/Platform/Log.cs" Link="Log.cs" />
   </ItemGroup>
 </Project>

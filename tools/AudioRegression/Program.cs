@@ -27,6 +27,9 @@ class Program
     static long Ticks(int ms) => System.Diagnostics.Stopwatch.Frequency * ms / 1000;
     static void Main(string[] args)
     {
+        if(args.Length>0 && args[0]=="--session-status"){WasapiCadenceProbe.SessionStatus();return;}
+        if(args.Length>1 && args[0]=="--output-benchmark"){WasapiCadenceProbe.OutputBenchmark(args[1],args.Length>2?args[2]:null);return;}
+        if(args.Length>1 && args[0]=="--wasapi-cadence"){WasapiCadenceProbe.Run(args[1],args.Length>2?args[2]:null);return;}
         if (args.Length > 0 && args[0] == "--decode")
         {
             using var reader = new MediaFoundationReader(args[1]);
@@ -37,6 +40,8 @@ class Program
         }
         if (args.Length > 0 && args[0] == "--record") { Record(int.Parse(args[1]), args[2]); return; }
         using var log = new Log(Path.Combine(AppContext.BaseDirectory, "logs"));
+        if(args.Length>0 && args[0]=="--output-flow"){OutputRegression.NativeFlow(log,args.Length>1?args[1]:null);return;}
+        if(args.Length>0 && args[0]=="--exclusive-probe"){OutputRegression.HardwareProbe(log,args.Length>1?args[1]:null);return;}
         int passed = 0;
         void Test(string name, Action test) { test(); Console.WriteLine("PASS " + name); passed++; }
         Test("Healthy PCM remains bit exact across changing targets", () => {
@@ -133,7 +138,7 @@ class Program
         Test("A remembered phone endpoint alone is not a live connection", () => {
             var snapshot = new WifiSnapshot { Enabled = true, State = SinkState.Armed, Remote = "192.168.0.2:45678", ControlAgeMs = 7000 };
             var view = ConnectionPresentation.Wifi(snapshot);
-            Assert(!view.PhoneReady && view.Title == "等待手机连接", "Old endpoint counted live");
+            Assert(!view.PhoneReady && view.Title == "等待手机响应", "Old endpoint counted live");
             snapshot.ControlAgeMs = 20;
             Assert(ConnectionPresentation.Wifi(snapshot).Title == "手机已连接", "Control link not recognized");
         });
@@ -222,8 +227,71 @@ class Program
             Send(b, WifiTransport.TypeAudio);
             Wait(() => r.GetSnapshot().Remote == bId && r.GetSnapshot().Received == 1 && r.GetSnapshot().BufferMs == 5, "B audio not independently buffered");
         });
+        Test("Tray follows Wi-Fi audio, silence, interruption and recovery rather than Bluetooth", () => {
+            var bt = new SinkSnapshot { State = SinkState.Faulted };
+            var w = new WifiSnapshot { Enabled = true, State = SinkState.Armed };
+            TrayState State() => TrayPresentation.Create(true, false, bt, w).State;
+            Assert(State() == TrayState.Waiting, "Listening claimed a connection");
+            w.Remote = "127.0.0.1:45678"; w.ControlAgeMs = 20;
+            Assert(State() == TrayState.Connected, "HELLO/control presence lost");
+            w.State = SinkState.LinkReady; w.LastAudioAgeMs = 10;
+            Assert(State() == TrayState.Preparing, "Prebuffer claimed playback");
+            w.State = SinkState.Flowing; w.OutputActive = true; w.HasAudibleSignal = true;
+            Assert(State() == TrayState.Playing, "Audible playback not active");
+            w.HasAudibleSignal = false;
+            Assert(State() == TrayState.Connected, "Silence claimed audible playback");
+            w.LastAudioAgeMs = 1200;
+            Assert(State() == TrayState.Warning, "Stale audio claimed healthy playback");
+            w.LastAudioAgeMs = 10; w.Recovering = true;
+            Assert(State() == TrayState.Warning, "Recovery claimed healthy playback");
+            w.Recovering = false; w.OutputActive = false;
+            Assert(State() == TrayState.Warning, "Missing output claimed success");
+            w.State = SinkState.Faulted;
+            Assert(State() == TrayState.Faulted, "Fault hidden");
+            Assert(TrayPresentation.Create(true, true, bt, w).State == TrayState.Preparing, "Switch status stale");
+        });
+        Test("Tray maps Bluetooth readiness separately from activity and mode", () => {
+            var w = new WifiSnapshot { State = SinkState.Faulted };
+            var expected = new[] { TrayState.Waiting, TrayState.Preparing, TrayState.Connected,
+                TrayState.Connected, TrayState.Playing, TrayState.Faulted, TrayState.Warning };
+            for (int i = 0; i < expected.Length; i++) {
+                var p = TrayPresentation.Create(false, false, new SinkSnapshot { State = (SinkState)i }, w);
+                Assert(p.State == expected[i] && p.Text.StartsWith("蓝牙"), "Bluetooth mapping " + i);
+            }
+        });
+        Test("Native Shell tray registers, updates all states, removes and releases icon handles", () => {
+            Assert(System.Runtime.InteropServices.Marshal.SizeOf<Win32.NOTIFYICONDATA>() == (IntPtr.Size == 8 ? 976 : 956), "Incorrect native notification layout");
+            Win32.WndProcDelegate proc = Win32.DefWindowProc;
+            var wc = new Win32.WNDCLASSEX {
+                cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Win32.WNDCLASSEX>(),
+                lpfnWndProc = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(proc),
+                hInstance = Win32.GetModuleHandle(null), lpszClassName = "BlueAudioSink.TrayRegression"
+            };
+            Assert(Win32.RegisterClassEx(ref wc) != 0, "Register test window");
+            IntPtr window = Win32.CreateWindowEx(0, wc.lpszClassName, "Tray regression", 0, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, wc.hInstance, IntPtr.Zero);
+            Assert(window != IntPtr.Zero, "Create test window");
+            int before = GetGuiResources(System.Diagnostics.Process.GetCurrentProcess().Handle, 1);
+            try {
+                using (var tray = new TrayIcon(window)) {
+                    for (int cycle = 0; cycle < 20; cycle++) {
+                        foreach (TrayState state in Enum.GetValues<TrayState>())
+                            Assert(tray.Update(new TrayPresentation { State = state, Text = "Native regression · " + state }) && tray.Registered, "Shell update " + state);
+                        tray.Remove(); Assert(!tray.Registered, "Remove failed");
+                    }
+                }
+                int after = GetGuiResources(System.Diagnostics.Process.GetCurrentProcess().Handle, 1);
+                Assert(after == before, $"Leaked USER handles: {before} -> {after}");
+            }
+            finally { Win32.DestroyWindow(window); GC.KeepAlive(proc); }
+        });
+        OutputRegression.Run(log,Test);
+        VolumeRegression.Run(log,Test);
+        HotkeyRegression.Run(log,Test);
+        WifiEnableRegression.Run(log,Test);
         Console.WriteLine($"{passed} tests passed");
     }
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern int GetGuiResources(IntPtr process, int flags);
     static void Record(int seconds, string path)
     {
         using var enumerator = new MMDeviceEnumerator();

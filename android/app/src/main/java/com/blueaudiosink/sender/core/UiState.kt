@@ -19,6 +19,9 @@ data class SenderUiState(
     val rttMs: Int = -1,
     /** 探测丢包率（千分比），888 表示 88.8%。 */
     val lossPermille: Int = 0,
+    val pcConnected: Boolean = false,
+    val remoteVolume: Int? = null,
+    val remoteVolumeReady: Boolean = false,
     val packetsSent: Long = 0,
     val tier: BufferTier = BufferTier.BALANCED,
     val message: String? = null,

@@ -8,6 +8,9 @@ namespace SinkLite.Platform
     /// </summary>
     internal static class Win32
     {
+        [DllImport("user32.dll")]
+        public static extern bool DrawIconEx(IntPtr dc,int x,int y,IntPtr icon,int width,int height,uint step,IntPtr brush,uint flags);
+
         public const int WM_CREATE = 0x0001;
         public const int WM_DESTROY = 0x0002;
         public const int WM_CLOSE = 0x0010;
@@ -27,6 +30,20 @@ namespace SinkLite.Platform
         public const int IDC_HAND = 32649;
         public const int TME_LEAVE = 0x00000002;
         public const int WM_APP = 0x8000;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int RegisterWindowMessage(string message);
+        [DllImport("user32.dll")]
+        public static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+        [DllImport("user32.dll")]
+        public static extern bool AllowSetForegroundWindow(uint processId);
+        [DllImport("user32.dll")]
+        public static extern bool DestroyWindow(IntPtr window);
+        [DllImport("user32.dll")]
+        public static extern IntPtr CreateIcon(IntPtr instance, int width, int height,
+            byte planes, byte bitsPerPixel, byte[] andBits, byte[] xorBits);
 
         public const int WS_OVERLAPPED = 0x00000000;
         public const int WS_CAPTION = 0x00C00000;
@@ -348,6 +365,16 @@ namespace SinkLite.Platform
             public IntPtr hIcon;
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
             public string szTip;
+            public int dwState;
+            public int dwStateMask;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+            public string szInfo;
+            public int uVersion;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+            public string szInfoTitle;
+            public int dwInfoFlags;
+            public Guid guidItem;
+            public IntPtr hBalloonIcon;
         }
     }
 }

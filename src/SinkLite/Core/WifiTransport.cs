@@ -31,6 +31,7 @@ namespace SinkLite.Core
         public const byte TypePong = 5;
         public const byte TypeOffer = 6;
         public const byte TypeHello = 7;
+        public const byte TypeVolumeGet = 8, TypeVolumeSet = 9, TypeVolumeState = 10;
 
         /// <summary>flags bit0：断流标记。</summary>
         public const byte FlagDiscontinuity = 0x01;
