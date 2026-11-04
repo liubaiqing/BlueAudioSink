@@ -4,6 +4,8 @@ using System.Text;
 
 namespace SinkLite.Platform
 {
+    internal enum AppTheme { System, Light, Dark }
+
     /// <summary>
     /// 极简配置：ini 风格键值，存放于 %LocalAppData%\BlueAudioSink\settings.ini。
     /// 只保存设备 ID 与开关，不保存任何隐私内容。
@@ -15,6 +17,7 @@ namespace SinkLite.Platform
         public bool AutoConnect { get; set; } = true;
 
         public bool CloseToTray { get; set; }
+        public AppTheme Theme { get; set; } = AppTheme.System;
         public int LogRetainDays { get; set; } = Log.DefaultRetainDays;
         public string LogDirectory { get; set; } = string.Empty;
 
@@ -102,6 +105,10 @@ namespace SinkLite.Platform
                         case "closetotray":
                             settings.CloseToTray = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
                             break;
+                        case "theme":
+                            if (Enum.TryParse(value, true, out AppTheme theme) && Enum.IsDefined(theme))
+                                settings.Theme = theme;
+                            break;
                         case "preferredrenderid":
                             settings.PreferredRenderId = value;
                             break;
@@ -178,6 +185,7 @@ namespace SinkLite.Platform
                 sb.AppendLine("deviceid=" + (DeviceId ?? string.Empty));
                 sb.AppendLine("autoconnect=" + (AutoConnect ? "1" : "0"));
                 sb.AppendLine("closetotray=" + (CloseToTray ? "1" : "0"));
+                sb.AppendLine("theme=" + Theme.ToString().ToLowerInvariant());
                 sb.AppendLine("logretaindays=" + LogRetainDays);
                 sb.AppendLine("logdirectory=" + LogDirectory);
                 sb.AppendLine("wifiexclusive=" + (WifiExclusive ? "1" : "0"));

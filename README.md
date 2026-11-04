@@ -2,9 +2,9 @@
 <h1 align="center">BlueAudioSink</h1>
 <p align="center">Chinese name: 蓝音频 · Abbreviation: BAS</p>
 <p align="center">Your phone's audio. Your PC's speakers.<br/>A lightweight Windows receiver with Bluetooth and local-network Wi-Fi modes.</p>
-<p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.2.12">Download latest</a> · English | <a href="README.zh-CN.md">简体中文</a> · <a href="LICENSE">MIT License</a></p>
+<p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.2.16">Download latest</a> · English | <a href="README.zh-CN.md">简体中文</a> · <a href="LICENSE">MIT License</a></p>
 
-**Latest stable release: Windows 0.2.12 / Android 0.2.4.** Update both apps for remote receiver volume control. Wi-Fi uses Android’s standard audio-capture consent; no Shizuku, root, developer options or ADB is required
+**Latest stable release: Windows 0.2.16 / Android 0.2.16.** Update both apps for remote receiver volume control. Wi-Fi uses Android’s standard audio-capture consent; no Shizuku, root, developer options or ADB is required
 
 Developed by **liubaiqing**. The apps currently use a Chinese interface; the guides below show which controls to use. The device screenshots are from real devices; settings layout previews are rendered by the application drawing code with example devices. Device names, local addresses, and phone status information are masked.
 
@@ -20,10 +20,10 @@ Developed by **liubaiqing**. The apps currently use a Chinese interface; the gui
 
 | Device | Download | Requirements |
 | --- | --- | --- |
-| PC | [BlueAudioSink-0.2.12.exe](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.12/BlueAudioSink-0.2.12.exe) | Windows 10 2004+ / Windows 11, x64 |
-| Phone — Wi-Fi only | [BlueAudioSink-Sender-0.2.4.apk](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.12/BlueAudioSink-Sender-0.2.4.apk) | Android 10+ |
+| PC | [BlueAudioSink-0.2.16.exe](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/BlueAudioSink-0.2.16.exe) | Windows 10 2004+ / Windows 11, x64 |
+| Phone — Wi-Fi only | [BlueAudioSink-Sender-0.2.16.apk](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/BlueAudioSink-Sender-0.2.16.apk) | Android 10+ |
 
-Double-click the EXE; no .NET installation is needed. Open the APK on your phone and install it. Android may ask you to allow installation from the app used to open the download. The APK is a Release build signed with a dedicated key. [SHA-256 checksums](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.12/SHA256SUMS.txt) are available.
+Double-click the EXE; no .NET installation is needed. Open the APK on your phone and install it. Android may ask you to allow installation from the app used to open the download. The APK is a Release build signed with a dedicated key. [SHA-256 checksums](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/SHA256SUMS.txt) are available.
 
 <details>
 <summary>Already installed the old debug-signed Android APK?</summary>
@@ -88,9 +88,7 @@ Click the PC Wi-Fi volume percentage to enter an integer from 0 to 100. Once con
 
 No Android sender is needed. Adapter and driver support is required. Auto-connect attempts to connect to the preferred phone; the phone must still send audio.
 
-## Local development build: remembered PC identity
-
-Windows **0.2.16** / Android **0.2.16** add stable PC identity and address rediscovery. These local builds have not replaced the stable GitHub download above. The local packages are `artifacts/BlueAudioSink-0.2.16.exe` and `artifacts/BlueAudioSink-Sender-0.2.16.apk`
+## Reconnect to a remembered PC
 
 Enable display over other apps once under **设置 → 音量悬浮窗** (Settings → Volume overlay). While sending, tap the sender notification to show the PC volume slider. Close the notification shade if it stays open
 
@@ -100,9 +98,17 @@ Connect once by discovery or manual address, then tap the remembered PC to find 
 
 Audio is blocked until identity verification and connection complete. The PC must have Wi-Fi reception enabled and LAN traffic must be permitted; identity does not bypass firewalls or provide cryptographic pairing
 
+## Appearance, speaker protection and logs
+
+Both apps offer System, Light and Dark themes under Settings. On Windows, open **General**.
+
+The Android sender mutes the phone’s media volume when Wi-Fi connects. **防误开外放** (Prevent accidental speaker playback) optionally uses Android Accessibility to intercept the physical volume-up key during transmission. The PC receiver volume is independent.
+
+Windows **Settings → Connection logs** manages retention and the log folder. Android diagnostics sync to the Windows log after a connection is confirmed. If the first connection fails, use **Settings → Export connection logs** on Android. Review Windows logs for device names and addresses before sharing publicly.
+
 ## Switch phones
 
-Open **设置 → 连接设备** (Settings → Devices), choose Bluetooth or Wi-Fi phones, then click the phone you want. A Wi-Fi phone must first select the PC in its sender app and start sending. One source plays at a time.
+Open **设置 → 连接设备** (Settings → Devices), browse either list without interrupting playback. To connect a phone, use the list for the active mode. A Wi-Fi phone must first select the PC in its sender app and start sending. One source plays at a time.
 
 ![Device switching guide](docs/images/windows-devices-sidebar.png)
 

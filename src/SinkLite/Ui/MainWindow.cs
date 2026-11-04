@@ -179,7 +179,9 @@ namespace SinkLite.UI
             }
             scale = dpi / 96.0;
 
-            CreateGdiObjects();
+            darkTheme = IsDarkTheme(pageSettings.Theme);
+            CreateThemeBrushes();
+            RecreateFonts();
 
             wndProc = WindowProc;
             IntPtr instance = Win32.GetModuleHandle(null);
@@ -211,11 +213,7 @@ namespace SinkLite.UI
                 log.Error("Ui.CreateFailed", ("win32Error", error));
                 throw new System.ComponentModel.Win32Exception(error, "创建主窗口失败");
             }
-            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000) &&
-                Win32.DwmSetWindowAttribute(hwnd, Win32.DWMWA_CAPTION_COLOR, WindowBackgroundColor, sizeof(int)) >= 0)
-            {
-                Win32.DwmSetWindowAttribute(hwnd, Win32.DWMWA_TEXT_COLOR, Win32.Rgb(23, 40, 63), sizeof(int));
-            }
+            ApplyCaptionTheme();
             log.Info("Ui.WindowHandle", ("hwnd", hwnd.ToInt64()));
             Win32.SendMessage(hwnd, 0x0080, new IntPtr(1), wc.hIcon); // WM_SETICON, ICON_BIG
             Win32.SendMessage(hwnd, 0x0080, IntPtr.Zero, wc.hIconSm); // ICON_SMALL
@@ -289,26 +287,6 @@ namespace SinkLite.UI
             {
                 return IntPtr.Zero;
             }
-        }
-
-        private void CreateGdiObjects()
-        {
-            brushBack = Win32.CreateSolidBrush(WindowBackgroundColor);
-            brushCard = Win32.CreateSolidBrush(Win32.Rgb(255, 255, 255));
-            brushBorder = Win32.CreateSolidBrush(Win32.Rgb(220, 227, 237));
-            brushAccent = Win32.CreateSolidBrush(Win32.Rgb(0, 120, 215));
-            brushAccentHover = Win32.CreateSolidBrush(Win32.Rgb(40, 150, 240));
-            brushAccentPress = Win32.CreateSolidBrush(Win32.Rgb(0, 85, 160));
-            brushBtn = Win32.CreateSolidBrush(Win32.Rgb(255, 255, 255));
-            brushBtnHover = Win32.CreateSolidBrush(Win32.Rgb(232, 240, 250));
-            brushBtnPress = Win32.CreateSolidBrush(Win32.Rgb(206, 222, 240));
-            brushRowHover = Win32.CreateSolidBrush(Win32.Rgb(238, 238, 238));
-            brushRowSelected = Win32.CreateSolidBrush(Win32.Rgb(229, 241, 251));
-            brushSwitchOff = Win32.CreateSolidBrush(Win32.Rgb(196, 196, 196));
-            brushSwitchOffHover = Win32.CreateSolidBrush(Win32.Rgb(168, 168, 168));
-            brushTooltip = Win32.CreateSolidBrush(Win32.Rgb(34, 48, 67));
-
-            RecreateFonts();
         }
 
         private void RecreateFonts()
@@ -739,6 +717,8 @@ namespace SinkLite.UI
                 if (Contains(PreferenceRect(m, AreaAutoStart), x, y)) return AreaAutoStart;
                 if (Contains(PreferenceRect(m, AreaCloseToTray), x, y)) return AreaCloseToTray;
                 if (Contains(PreferenceRect(m, AreaAutoConnect), x, y)) return AreaAutoConnect;
+                foreach (int area in ThemeAreas)
+                    if (Contains(ThemeOptionRect(m, area), x, y)) return area;
                 if (Contains(m.Buffer80Rect, x, y)) return AreaBuffer80;
                 if (Contains(m.Buffer120Rect, x, y)) return AreaBuffer120;
                 if (Contains(m.Buffer160Rect, x, y)) return AreaBuffer160;
@@ -885,6 +865,11 @@ namespace SinkLite.UI
 
             switch (area)
             {
+                case AreaThemeSystem:
+                case AreaThemeLight:
+                case AreaThemeDark:
+                    SaveTheme(area);
+                    return;
                 case AreaSettingsGeneral:
                 case AreaSettingsDevices:
                 case AreaSettingsNetwork:
@@ -1174,7 +1159,11 @@ namespace SinkLite.UI
                         for (int i = 0; i < ComputeMetrics().VisibleRows; i++) areas.Add(AreaDeviceBase + i);
                         areas.AddRange(new[] { AreaRefresh, AreaPreviousPage, AreaNextPage });
                     }
-                    else areas.AddRange(new[] { AreaOutput, AreaExclusive, AreaVolumeValue, AreaVolumeDown, AreaVolumeUp, AreaAutoStart, AreaCloseToTray, AreaAutoConnect, AreaBuffer80, AreaBuffer120, AreaBuffer160 });
+                    else
+                    {
+                        areas.AddRange(new[] { AreaOutput, AreaExclusive, AreaVolumeValue, AreaVolumeDown, AreaVolumeUp, AreaAutoStart, AreaCloseToTray, AreaAutoConnect, AreaBuffer80, AreaBuffer120, AreaBuffer160 });
+                        areas.AddRange(ThemeAreas);
+                    }
                 }
                 else if (wifiMode)
                 {
@@ -1217,6 +1206,13 @@ namespace SinkLite.UI
 
             switch (msg)
             {
+                case 0x001A: // WM_SETTINGCHANGE
+                    if (pageSettings.Theme == AppTheme.System && hwnd != IntPtr.Zero) ApplyWindowTheme();
+                    break;
+                case 0x0133: // WM_CTLCOLOREDIT
+                    Win32.SetTextColor(wParam, TextColor);
+                    Win32.SetBkColor(wParam, SurfaceColor);
+                    return brushCard;
                 case HotkeyCapture.Message:
                     CaptureHotkey(wParam.ToInt32(),lParam.ToInt32());
                     return IntPtr.Zero;
@@ -1417,7 +1413,7 @@ namespace SinkLite.UI
                 if (settingsMode && dropdownOpen) DrawDropdown(hdcMem);
                 DrawKeyboardFocus(hdcMem, m);
                 if (DateTime.Now < noticeUntil)
-                    Text(hdcMem, notice, fontBody, Win32.Rgb(0, 93, 165), Rect(m.Left, m.Height - S(24), m.Left + m.ContentWidth, m.Height - S(4)));
+                    Text(hdcMem, notice, fontBody, AccentTextColor, Rect(m.Left, m.Height - S(24), m.Left + m.ContentWidth, m.Height - S(4)));
                 DrawHelp(hdcMem, m);
                 Win32.BitBlt(hdcScreen, 0, 0, width, height, hdcMem, 0, 0, Win32.SRCCOPY);
             }
@@ -1472,9 +1468,9 @@ namespace SinkLite.UI
             Dot(hdc, m.Left + S(4), S(78), S(8), ToneColor(view.Tone));
             bool retry = wifiMode && !settingsMode && wifi.Current.State == SinkState.Faulted;
             int titleRight = retry ? RetryRect(m).Left : m.SettingsRect.Left;
-            Text(hdc, view.Title, fontTitle, Win32.Rgb(23, 40, 63), Rect(m.Left + S(20), S(66), titleRight - S(8), S(94)));
+            Text(hdc, view.Title, fontTitle, TextColor, Rect(m.Left + S(20), S(66), titleRight - S(8), S(94)));
             if (retry) DrawButton(hdc, RetryRect(m), "重试", AreaRetryWifi, false);
-            Text(hdc, view.Description, fontBody, Win32.Rgb(80, 94, 114), Rect(m.Left + S(4), S(98), right - S(4), S(120)));
+            Text(hdc, view.Description, fontBody, SecondaryColor, Rect(m.Left + S(4), S(98), right - S(4), S(120)));
             int col = (m.ContentWidth - S(8)) / 3;
             Stage(hdc, m.Left + S(4), S(124), col, view.PhoneReady, "手机已连接", "等待手机");
             Stage(hdc, m.Left + S(4) + col, S(124), col, view.StreamReady, "音频已接收", "等待音频");
@@ -1483,12 +1479,10 @@ namespace SinkLite.UI
 
         private void Stage(IntPtr hdc, int left, int top, int width, bool ready, string active, string waiting)
         {
-            Dot(hdc, left, top + S(5), S(5), ready ? Win32.Rgb(0, 112, 194) : Win32.Rgb(165, 177, 193));
-            Text(hdc, ready ? active : waiting, fontSmall, ready ? Win32.Rgb(34, 76, 114) : Win32.Rgb(100, 112, 129),
+            Dot(hdc, left, top + S(5), S(5), ready ? AccentTextColor : DisabledColor);
+            Text(hdc, ready ? active : waiting, fontSmall, ready ? SecondaryColor : SecondaryColor,
                 Rect(left + S(12), top, left + width - S(4), top + S(18)));
         }
-
-        private static readonly int WindowBackgroundColor = Win32.Rgb(245, 247, 251);
 
         private void ReturnFromSettings()
         {
@@ -1510,7 +1504,7 @@ namespace SinkLite.UI
                 var gear = m.SettingsRect;
                 if (hoverArea == AreaSettings || pressedArea == AreaSettings)
                     RoundFill(hdc, gear, S(8), pressedArea == AreaSettings ? brushBtnPress : brushBtnHover);
-                Text(hdc, "\uE713", fontGear, Win32.Rgb(47, 64, 86), gear, true);
+                Text(hdc, "\uE713", fontGear, TextColor, gear, true);
             }
             Win32.RECT line = Rect(m.NavLeft, S(52), m.NavLeft + m.NavWidth, S(53));
             Win32.FillRect(hdc, ref line, brushBorder);
@@ -1521,17 +1515,17 @@ namespace SinkLite.UI
             int left = m.Left, right = left + m.ContentWidth, half = m.ContentWidth / 2;
             Win32.RECT devices = Rect(left, S(154), right, S(230));
             RoundFill(hdc, devices, S(8), brushCard); RoundBorder(hdc, devices, S(8), brushBorder);
-            Text(hdc, "发送手机", fontSmall, Win32.Rgb(88, 102, 122), Rect(left + S(12), S(162), left + half - S(8), S(180)));
+            Text(hdc, "发送手机", fontSmall, SecondaryColor, Rect(left + S(12), S(162), left + half - S(8), S(180)));
             string phone = string.IsNullOrEmpty(snapshot.DeviceName) ? (string.IsNullOrEmpty(snapshot.Remote) ? "尚未连接" : "Android 手机") : snapshot.DeviceName;
-            Text(hdc, phone, fontHeading, Win32.Rgb(23, 40, 63), Rect(left + S(12), S(184), left + half - S(8), S(208)));
+            Text(hdc, phone, fontHeading, TextColor, Rect(left + S(12), S(184), left + half - S(8), S(208)));
             string address = snapshot.Remote;
             int colon = string.IsNullOrEmpty(address) ? -1 : address.LastIndexOf(':');
             if (colon > 0) address = address.Substring(0, colon);
-            Text(hdc, address ?? "等待手机发送端", fontSmall, Win32.Rgb(88, 102, 122), Rect(left + S(12), S(208), left + half - S(8), S(226)));
-            Text(hdc, "播放到", fontSmall, Win32.Rgb(88, 102, 122), Rect(left + half + S(8), S(162), right - S(12), S(180)));
+            Text(hdc, address ?? "等待手机发送端", fontSmall, SecondaryColor, Rect(left + S(12), S(208), left + half - S(8), S(226)));
+            Text(hdc, "播放到", fontSmall, SecondaryColor, Rect(left + half + S(8), S(162), right - S(12), S(180)));
             string destination = snapshot.OutputName ?? cachedPreferredName;
             Win32.RECT destinationRect = Rect(left + half + S(8), S(184), right - S(12), S(226));
-            Win32.SelectObject(hdc, fontBody); Win32.SetTextColor(hdc, Win32.Rgb(23, 40, 63));
+            Win32.SelectObject(hdc, fontBody); Win32.SetTextColor(hdc, TextColor);
             Win32.DrawText(hdc, destination, -1, ref destinationRect, Win32.DT_LEFT | Win32.DT_WORDBREAK | Win32.DT_END_ELLIPSIS);
             Win32.RECT stats = Rect(left, S(242), right, S(316));
             RoundFill(hdc, stats, S(8), brushCard); RoundBorder(hdc, stats, S(8), brushBorder);
@@ -1546,7 +1540,7 @@ namespace SinkLite.UI
             }
             DrawButton(hdc,m.ConnectRect,"启用",AreaWifiEnable,!snapshot.Enabled);
             DrawButton(hdc,m.DisconnectRect,"断开",AreaWifiDisconnect,false);
-            Text(hdc, "电脑地址  " + (snapshot.LocalAddress ?? "—"), fontSmall, Win32.Rgb(80, 94, 114), Rect(left, S(370), m.CopyAddressRect.Left - S(6), S(398)));
+            Text(hdc, "电脑地址  " + (snapshot.LocalAddress ?? "—"), fontSmall, SecondaryColor, Rect(left, S(370), m.CopyAddressRect.Left - S(6), S(398)));
             DrawButton(hdc, m.CopyAddressRect, "复制", AreaCopyAddress, false);
             DrawButton(hdc, m.DetailsRect, wifiDetails ? "收起详情" : "连接详情", AreaDetails, false);
             if (wifiDetails)
@@ -1554,17 +1548,17 @@ namespace SinkLite.UI
                 Win32.RECT panel = Rect(left, S(402), right, S(432));
                 RoundFill(hdc, panel, S(8), brushCard); RoundBorder(hdc, panel, S(8), brushBorder);
                 Text(hdc, "手机端点 " + (snapshot.Remote ?? "未连接") + "  ·  端口 " + snapshot.Port,
-                    fontSmall, Win32.Rgb(80, 94, 114), Rect(left + S(8), panel.Top + S(1), right - S(8), panel.Top + S(15)));
+                    fontSmall, SecondaryColor, Rect(left + S(8), panel.Top + S(1), right - S(8), panel.Top + S(15)));
                 Text(hdc, "收到 " + snapshot.Received + "  ·  缺失 " + snapshot.Missing + "  ·  迟到 " + snapshot.Late + "  ·  欠载 " + snapshot.Underruns + " 次",
-                    fontSmall, Win32.Rgb(80, 94, 114), Rect(left + S(8), panel.Top + S(15), right - S(8), panel.Top + S(29)));
+                    fontSmall, SecondaryColor, Rect(left + S(8), panel.Top + S(15), right - S(8), panel.Top + S(29)));
             }
         }
 
         private void MetricTile(IntPtr hdc, Win32.RECT rect, string label, string value, string hint, bool warning)
         {
-            Text(hdc, label, fontSmall, Win32.Rgb(88, 102, 122), Rect(rect.Left + S(12), rect.Top + S(6), rect.Right - S(8), rect.Top + S(24)));
-            Text(hdc, value, fontValue, warning ? Win32.Rgb(170, 85, 0) : Win32.Rgb(23, 40, 63), Rect(rect.Left + S(12), rect.Top + S(24), rect.Right - S(8), rect.Top + S(56)));
-            Text(hdc, hint, fontSmall, Win32.Rgb(88, 102, 122), Rect(rect.Left + S(12), rect.Top + S(56), rect.Right - S(8), rect.Bottom - S(2)));
+            Text(hdc, label, fontSmall, SecondaryColor, Rect(rect.Left + S(12), rect.Top + S(6), rect.Right - S(8), rect.Top + S(24)));
+            Text(hdc, value, fontValue, warning ? WarningColor : TextColor, Rect(rect.Left + S(12), rect.Top + S(24), rect.Right - S(8), rect.Top + S(56)));
+            Text(hdc, hint, fontSmall, SecondaryColor, Rect(rect.Left + S(12), rect.Top + S(56), rect.Right - S(8), rect.Bottom - S(2)));
         }
 
         private static string FormatMs(double value)
@@ -1590,13 +1584,13 @@ namespace SinkLite.UI
             int right = m.Left + m.ContentWidth, half = m.ContentWidth / 2;
             Win32.RECT card = Rect(m.Left, S(154), right, S(230));
             RoundFill(hdc, card, S(8), brushCard); RoundBorder(hdc, card, S(8), brushBorder);
-            Text(hdc, "发送手机", fontSmall, Win32.Rgb(88, 102, 122), Rect(m.Left + S(12), S(162), m.Left + half, S(180)));
-            Text(hdc, snapshot.DeviceName ?? "尚未选择", fontHeading, Win32.Rgb(23, 40, 63), Rect(m.Left + S(12), S(184), m.Left + half - S(8), S(208)));
-            Text(hdc, "播放到", fontSmall, Win32.Rgb(88, 102, 122), Rect(m.Left + half + S(8), S(162), right - S(12), S(180)));
-            Text(hdc, cachedPreferredName, fontBody, Win32.Rgb(23, 40, 63), Rect(m.Left + half + S(8), S(184), right - S(12), S(208)));
+            Text(hdc, "发送手机", fontSmall, SecondaryColor, Rect(m.Left + S(12), S(162), m.Left + half, S(180)));
+            Text(hdc, snapshot.DeviceName ?? "尚未选择", fontHeading, TextColor, Rect(m.Left + S(12), S(184), m.Left + half - S(8), S(208)));
+            Text(hdc, "播放到", fontSmall, SecondaryColor, Rect(m.Left + half + S(8), S(162), right - S(12), S(180)));
+            Text(hdc, cachedPreferredName, fontBody, TextColor, Rect(m.Left + half + S(8), S(184), right - S(12), S(208)));
             DrawButton(hdc, m.ConnectRect, snapshot.State == SinkState.Flowing ? "重新连接" : "连接", AreaConnect, true);
             DrawButton(hdc, m.DisconnectRect, "断开", AreaDisconnect, false);
-            Text(hdc, "更换手机或播放设备，请前往设置。", fontSmall, Win32.Rgb(88, 102, 122), Rect(m.Left, S(292), right, S(316)));
+            Text(hdc, "更换手机或播放设备，请前往设置。", fontSmall, SecondaryColor, Rect(m.Left, S(292), right, S(316)));
         }
 
         private void DrawDeviceSettings(IntPtr hdc, Metrics m)
@@ -1609,22 +1603,22 @@ namespace SinkLite.UI
                 ? $"仅查看 · 返回主页切换到{(browsingWifiDevices ? " Wi-Fi" : "蓝牙")}后可选设备"
                 : browsingWifiDevices && !wifi.Enabled ? "请先在 Wi-Fi 主页启用接收" : null;
             if (hint != null)
-                Text(hdc, hint, fontSmall, Win32.Rgb(88, 102, 122), Rect(m.Left, m.RefreshRect.Bottom, right, m.DeviceListTop));
+                Text(hdc, hint, fontSmall, SecondaryColor, Rect(m.Left, m.RefreshRect.Bottom, right, m.DeviceListTop));
             for (int rowIndex = 0; rowIndex < m.VisibleRows; rowIndex++)
             {
                 DeviceChoice choice = connectionDevices[devicePage * MaxDeviceRows + rowIndex];
                 int top = m.DeviceListTop + rowIndex * S(DeviceRowHeight);
                 Win32.RECT row = Rect(m.Left, top, right, top + S(DeviceRowHeight) - S(2));
                 RoundFill(hdc, row, S(6), choice.Selected ? brushRowSelected : hoverArea == AreaDeviceBase + rowIndex ? brushBtnHover : brushCard);
-                Text(hdc, choice.Name, fontBody, Win32.Rgb(23, 40, 63), Rect(row.Left + S(10), row.Top, row.Right - S(78), browsingWifiDevices ? row.Top + S(18) : row.Bottom));
-                if (browsingWifiDevices) Text(hdc, choice.Id, fontSmall, Win32.Rgb(88, 102, 122), Rect(row.Left + S(10), row.Top + S(18), row.Right - S(78), row.Bottom));
-                Text(hdc, choice.Status, fontSmall, choice.Selected ? Win32.Rgb(0, 100, 170) : Win32.Rgb(88, 102, 122), Rect(row.Right - S(74), row.Top, row.Right - S(6), row.Bottom), true);
+                Text(hdc, choice.Name, fontBody, TextColor, Rect(row.Left + S(10), row.Top, row.Right - S(78), browsingWifiDevices ? row.Top + S(18) : row.Bottom));
+                if (browsingWifiDevices) Text(hdc, choice.Id, fontSmall, SecondaryColor, Rect(row.Left + S(10), row.Top + S(18), row.Right - S(78), row.Bottom));
+                Text(hdc, choice.Status, fontSmall, choice.Selected ? AccentTextColor : SecondaryColor, Rect(row.Right - S(74), row.Top, row.Right - S(6), row.Bottom), true);
             }
             if (connectionDevices.Count == 0)
-                Text(hdc, browsingWifiDevices ? "暂无在线手机" : "暂无已配对手机", fontBody, Win32.Rgb(88, 102, 122), Rect(m.Left, m.DeviceListTop, right, m.DeviceListTop + S(36)), true);
+                Text(hdc, browsingWifiDevices ? "暂无在线手机" : "暂无已配对手机", fontBody, SecondaryColor, Rect(m.Left, m.DeviceListTop, right, m.DeviceListTop + S(36)), true);
             if (connectionDevices.Count > MaxDeviceRows)
             {
-                Text(hdc, (devicePage + 1) + " / " + ((connectionDevices.Count + MaxDeviceRows - 1) / MaxDeviceRows), fontSmall, Win32.Rgb(88, 102, 122), Rect(m.Left, m.Height - S(68), SettingsControlRect(m, AreaPreviousPage).Left - S(8), m.Height - S(38)));
+                Text(hdc, (devicePage + 1) + " / " + ((connectionDevices.Count + MaxDeviceRows - 1) / MaxDeviceRows), fontSmall, SecondaryColor, Rect(m.Left, m.Height - S(68), SettingsControlRect(m, AreaPreviousPage).Left - S(8), m.Height - S(38)));
                 DrawButton(hdc, SettingsControlRect(m, AreaPreviousPage), "上一页", AreaPreviousPage, false);
                 DrawButton(hdc, SettingsControlRect(m, AreaNextPage), "下一页", AreaNextPage, false);
             }
@@ -1633,7 +1627,7 @@ namespace SinkLite.UI
         private void DrawInlineTab(IntPtr hdc, Win32.RECT rect, string label, bool selected, int area, int underlineWidth = 0)
         {
             if (hoverArea == area) RoundFill(hdc, rect, S(4), brushBtnHover);
-            Text(hdc, label, selected ? fontCaption : fontSmall, selected ? Win32.Rgb(0, 110, 195) : Win32.Rgb(88, 102, 122), rect, true);
+            Text(hdc, label, selected ? fontCaption : fontSmall, selected ? AccentTextColor : SecondaryColor, rect, true);
             if (selected)
             {
                 int inset = underlineWidth > 0 ? Math.Max(0, (rect.Right - rect.Left - S(underlineWidth)) / 2) : S(12);
@@ -1652,14 +1646,14 @@ namespace SinkLite.UI
             RoundBorder(hdc, m.OutputRect, S(8), hover ? brushAccent : brushBorder);
 
             Win32.SelectObject(hdc, fontBody);
-            Win32.SetTextColor(hdc, Win32.Rgb(32, 32, 32));
+            Win32.SetTextColor(hdc, TextColor);
             Win32.RECT textRect = Rect(m.OutputRect.Left + S(12), m.OutputRect.Top,
                 m.OutputRect.Right - S(30), m.OutputRect.Bottom);
             Win32.DrawText(hdc, cachedPreferredName, -1, ref textRect,
                 Win32.DT_LEFT | Win32.DT_VCENTER | Win32.DT_SINGLELINE | Win32.DT_END_ELLIPSIS);
 
             Win32.SelectObject(hdc, fontSmall);
-            Win32.SetTextColor(hdc, Win32.Rgb(110, 110, 110));
+            Win32.SetTextColor(hdc, SecondaryColor);
             Win32.RECT arrowRect = Rect(m.OutputRect.Right - S(26), m.OutputRect.Top,
                 m.OutputRect.Right - S(10), m.OutputRect.Bottom);
             Win32.DrawText(hdc, dropdownOpen ? "▴" : "▾", -1, ref arrowRect,
@@ -1692,7 +1686,7 @@ namespace SinkLite.UI
                 }
 
                 Win32.SelectObject(hdc, fontBody);
-                Win32.SetTextColor(hdc, isCurrent ? Win32.Rgb(0, 100, 170) : Win32.Rgb(40, 40, 40));
+                Win32.SetTextColor(hdc, isCurrent ? AccentTextColor : TextColor);
                 Win32.RECT textRect = Rect(row.Left + S(10), row.Top, row.Right - S(10), row.Bottom);
                 Win32.DrawText(hdc, cachedOutputs[i].Name, -1, ref textRect,
                     Win32.DT_LEFT | Win32.DT_VCENTER | Win32.DT_SINGLELINE | Win32.DT_END_ELLIPSIS);
@@ -1711,7 +1705,7 @@ namespace SinkLite.UI
                 var rect = SettingsControlRect(m, area);
                 if (selected || hoverArea == area) RoundFill(hdc, rect, S(6), selected ? brushRowSelected : brushBtnHover);
                 if (selected) { var mark = Rect(rect.Left, rect.Top + S(10), rect.Left + S(3), rect.Bottom - S(10)); Win32.FillRect(hdc, ref mark, brushAccent); }
-                Text(hdc, area == AreaSettingsGeneral ? "常规" : area == AreaSettingsDevices ? "连接设备" : area == AreaSettingsHotkeys ? "快捷键" : area == AreaSettingsAbout ? "关于" : area == AreaSettingsLogs ? "连接日志" : "网络", selected ? fontHeading : fontBody, selected ? Win32.Rgb(0, 100, 180) : Win32.Rgb(80, 94, 114), rect, true);
+                Text(hdc, area == AreaSettingsGeneral ? "常规" : area == AreaSettingsDevices ? "连接设备" : area == AreaSettingsHotkeys ? "快捷键" : area == AreaSettingsAbout ? "关于" : area == AreaSettingsLogs ? "连接日志" : "网络", selected ? fontHeading : fontBody, selected ? AccentTextColor : SecondaryColor, rect, true);
             }
             var divider = Rect(m.Left - S(9), S(68), m.Left - S(8), m.Height - S(38));
             Win32.FillRect(hdc, ref divider, brushBorder);
@@ -1724,24 +1718,25 @@ namespace SinkLite.UI
             RoundFill(hdc, general, S(8), brushCard); RoundBorder(hdc, general, S(8), brushBorder);
             DrawOutputSection(hdc, m);
             DrawPreference(hdc,m,AreaExclusive,"WASAPI 独占输出",pageSettings.WifiExclusive);
-            Text(hdc,"Wi-Fi 音量",fontBody,wifiMode?Win32.Rgb(23,40,63):Win32.Rgb(142,152,167),Rect(m.Left+S(12),S(178),VolumeValueRect(m).Left,S(208)));
+            Text(hdc,"Wi-Fi 音量",fontBody,wifiMode?TextColor:DisabledColor,Rect(m.Left+S(12),S(178),VolumeValueRect(m).Left,S(208)));
             if(hoverArea==AreaVolumeValue && wifiMode) RoundFill(hdc,VolumeValueRect(m),S(6),brushBtnHover);
-            Text(hdc,pageSettings.WifiVolume+"%",fontBody,wifiMode?Win32.Rgb(0,112,194):Win32.Rgb(142,152,167),VolumeValueRect(m),true);
+            Text(hdc,pageSettings.WifiVolume+"%",fontBody,wifiMode?AccentTextColor:DisabledColor,VolumeValueRect(m),true);
             DrawButton(hdc,VolumeRect(m,false),"−",AreaVolumeDown,false);
             DrawButton(hdc,VolumeRect(m,true),"+",AreaVolumeUp,false);
             var audio=wifi?.Current;
-            Text(hdc,OutputStatusText(),fontSmall,!string.IsNullOrEmpty(audio?.OutputFallbackReason)?Win32.Rgb(151,91,22):Win32.Rgb(88,102,122),Rect(m.Left+S(12),S(212),m.Left+m.ContentWidth-S(28),S(232)));
+            Text(hdc,OutputStatusText(),fontSmall,!string.IsNullOrEmpty(audio?.OutputFallbackReason)?WarningColor:SecondaryColor,Rect(m.Left+S(12),S(212),m.Left+m.ContentWidth-S(28),S(232)));
             DrawHelpMark(hdc,m.Left+m.ContentWidth-S(16),S(222));
             var connection = Rect(m.Left, S(242), m.Left + m.ContentWidth, S(350));
             RoundFill(hdc, connection, S(8), brushCard); RoundBorder(hdc, connection, S(8), brushBorder);
             DrawPreference(hdc, m, AreaAutoStart,"开机启动",autoStartEnabled);
             DrawPreference(hdc, m, AreaCloseToTray,"关闭时缩小到托盘",pageSettings.CloseToTray);
             DrawPreference(hdc, m, AreaAutoConnect, "自动连接", pageSettings.AutoConnect);
-            Text(hdc, "Wi-Fi 缓冲", fontSmall, Win32.Rgb(23, 40, 63), Rect(m.Left + S(8), S(358), m.Left + S(82), S(390)));
+            Text(hdc, "Wi-Fi 缓冲", fontSmall, TextColor, Rect(m.Left + S(8), S(358), m.Left + S(82), S(390)));
             DrawHelpMark(hdc, m.Left + S(88), S(374));
             DrawInlineTab(hdc, m.Buffer80Rect, "80 ms", pageSettings.BufferBaseMs == 80, AreaBuffer80);
             DrawInlineTab(hdc, m.Buffer120Rect, "120 ms", pageSettings.BufferBaseMs == 120, AreaBuffer120);
             DrawInlineTab(hdc, m.Buffer160Rect, "160 ms", pageSettings.BufferBaseMs == 160, AreaBuffer160);
+            DrawThemeSettings(hdc, m);
         }
 
         private void DrawNetworkSettings(IntPtr hdc, Metrics m)
@@ -1749,12 +1744,12 @@ namespace SinkLite.UI
             int right = m.Left + m.ContentWidth;
             var card = Rect(m.Left, S(76), right, S(158));
             RoundFill(hdc, card, S(8), brushCard); RoundBorder(hdc, card, S(8), brushBorder);
-            Text(hdc, "Wi-Fi 防火墙", fontHeading, Win32.Rgb(23, 40, 63), Rect(m.Left + S(12), S(86), right - S(12), S(114)));
+            Text(hdc, "Wi-Fi 防火墙", fontHeading, TextColor, Rect(m.Left + S(12), S(86), right - S(12), S(114)));
             DrawHelpMark(hdc, m.Left + S(132), S(100));
             string state = firewallTask != null ? firewallChanging ? "等待 Windows 授权与配置…" : "正在检测…"
                 : !firewallStatus.Available ? "无法读取防火墙状态" : firewallStatus.RuleReady ? "已开启局域网放行"
                 : firewallStatus.RuleExists ? "放行规则需要修复" : "尚未添加放行规则";
-            Text(hdc, state, fontSmall, firewallStatus.RuleReady ? Win32.Rgb(20, 120, 75) : Win32.Rgb(80, 94, 114), Rect(m.Left + S(12), S(118), right - S(12), S(146)));
+            Text(hdc, state, fontSmall, firewallStatus.RuleReady ? SuccessColor : SecondaryColor, Rect(m.Left + S(12), S(118), right - S(12), S(146)));
             DrawButton(hdc, SettingsControlRect(m, AreaFirewallEnable), firewallStatus.RuleReady ? "重新配置" : "尝试开启放行", AreaFirewallEnable, true);
             DrawButton(hdc, SettingsControlRect(m, AreaFirewallDisable), "移除本程序规则", AreaFirewallDisable, false);
             DrawButton(hdc, SettingsControlRect(m, AreaFirewallCheck), "重新检测", AreaFirewallCheck, false);
@@ -1765,8 +1760,8 @@ namespace SinkLite.UI
                 if (firewallStatus.InboundBlocked || firewallStatus.ModifyState != 0) hint = "系统策略限制入站连接，请联系管理员";
                 else if (!firewallStatus.PrivateActive) hint = "当前不是专用网络，规则暂不生效";
             }
-            if (!string.IsNullOrEmpty(hint)) DrawWrappedText(hdc, hint, fontSmall, Win32.Rgb(151, 91, 22), Rect(m.Left, S(270), right, S(318)));
-            if (!string.IsNullOrEmpty(firewallMessage)) DrawWrappedText(hdc, firewallMessage, fontBody, Win32.Rgb(0, 93, 165), Rect(m.Left, S(328), right, S(390)));
+            if (!string.IsNullOrEmpty(hint)) DrawWrappedText(hdc, hint, fontSmall, WarningColor, Rect(m.Left, S(270), right, S(318)));
+            if (!string.IsNullOrEmpty(firewallMessage)) DrawWrappedText(hdc, firewallMessage, fontBody, AccentTextColor, Rect(m.Left, S(328), right, S(390)));
         }
 
         private void DrawPreference(IntPtr hdc, Metrics m, int area, string label, bool value)
@@ -1774,14 +1769,14 @@ namespace SinkLite.UI
             var row = PreferenceRect(m, area);
             if (hoverArea == area || pressedArea == area) RoundFill(hdc, row, S(6), pressedArea == area ? brushBtnPress : brushBtnHover);
             bool enabled=IsEnabled(area);
-            Text(hdc, label, fontBody, enabled ? Win32.Rgb(23,40,63) : Win32.Rgb(142,152,167), Rect(row.Left + S(4), row.Top, row.Right - S(62), row.Bottom));
+            Text(hdc, label, fontBody, enabled ? TextColor : DisabledColor, Rect(row.Left + S(4), row.Top, row.Right - S(62), row.Bottom));
             DrawSwitch(hdc, row.Right - S(8), (row.Top + row.Bottom) / 2, value, hoverArea == area,enabled);
         }
 
         private void DrawHelpMark(IntPtr hdc, int x, int y)
         {
-            Dot(hdc, x - S(7), y - S(7), S(14), Win32.Rgb(226, 234, 244));
-            Text(hdc, "?", fontSmall, Win32.Rgb(72, 94, 123), Rect(x - S(7), y - S(9), x + S(7), y + S(8)), true);
+            Dot(hdc, x - S(7), y - S(7), S(14), HelpBackgroundColor);
+            Text(hdc, "?", fontSmall, HelpTextColor, Rect(x - S(7), y - S(9), x + S(7), y + S(8)), true);
         }
 
         private void DrawWrappedText(IntPtr hdc, string text, IntPtr font, int color, Win32.RECT rect)
@@ -1874,17 +1869,22 @@ namespace SinkLite.UI
             string text = HelpText(helpArea);
             if (string.IsNullOrEmpty(text)) return;
             if (text.Length > 256) text = text.Substring(0, 256);
-            int width = Math.Min(S(280), m.Width - S(32));
-            var measured = Rect(0, 0, width - S(24), 0);
+            const int calculateRect = 0x00000400;
+            int paddingX = S(8), paddingY = S(5);
+            int maxWidth = Math.Min(S(280), m.Width - S(32));
+            var measured = Rect(0, 0, 0, 0);
             Win32.SelectObject(hdc, fontSmall);
-            Win32.DrawText(hdc, text, -1, ref measured, Win32.DT_WORDBREAK | 0x00000400); // DT_CALCRECT
-            int height = Math.Min(m.Height - S(24), measured.Bottom - measured.Top + S(20));
+            Win32.DrawText(hdc, text, -1, ref measured, calculateRect);
+            int width = Math.Min(maxWidth, measured.Right + 2 * paddingX);
+            measured = Rect(0, 0, width - 2 * paddingX, 0);
+            Win32.DrawText(hdc, text, -1, ref measured, Win32.DT_WORDBREAK | calculateRect);
+            int height = Math.Min(m.Height - S(24), measured.Bottom + 2 * paddingY);
             int left = Math.Clamp(helpX + S(10), S(12), m.Width - width - S(12));
             int top = helpY + S(22);
             if (top + height > m.Height - S(12)) top = Math.Max(S(12), helpY - height - S(12));
             var box = Rect(left, top, left + width, top + height);
             RoundFill(hdc, box, S(8), brushTooltip);
-            DrawWrappedText(hdc, text, fontSmall, Win32.Rgb(255, 255, 255), Rect(left + S(12), top + S(10), box.Right - S(12), box.Bottom - S(10)));
+            DrawWrappedText(hdc, text, fontSmall, Win32.Rgb(255, 255, 255), Rect(left + paddingX, top + paddingY, box.Right - paddingX, box.Bottom - paddingY));
         }
 
         /// <summary>经典划钮：关闭时滑块在左且槽为灰色，开启时滑块在右且槽为主色。</summary>
@@ -1932,7 +1932,7 @@ namespace SinkLite.UI
 
             if (!enabled)
             {
-                fill = brushBack; textColor = Win32.Rgb(142, 152, 167);
+                fill = brushBack; textColor = DisabledColor;
             }
             else if (primary)
             {
@@ -1942,7 +1942,7 @@ namespace SinkLite.UI
             else
             {
                 fill = pressed ? brushBtnPress : (hover ? brushBtnHover : brushBtn);
-                textColor = Win32.Rgb(38, 38, 38);
+                textColor = TextColor;
             }
 
             RoundFill(hdc, rect, S(8), fill);
@@ -1966,7 +1966,7 @@ namespace SinkLite.UI
         private void DrawCaption(IntPtr hdc, string text, int x, int top)
         {
             Win32.SelectObject(hdc, fontCaption);
-            Win32.SetTextColor(hdc, Win32.Rgb(88, 102, 122));
+            Win32.SetTextColor(hdc, SecondaryColor);
             Win32.RECT rect = Rect(x, top, x + S(200), top + S(18));
             Win32.DrawText(hdc, text, -1, ref rect,
                 Win32.DT_LEFT | Win32.DT_VCENTER | Win32.DT_SINGLELINE);
@@ -1992,8 +1992,10 @@ namespace SinkLite.UI
 
         private void RoundBorder(IntPtr hdc, Win32.RECT rect, int radius, IntPtr brush)
         {
-            if (SmoothShape(hdc, rect, radius / 2.0, Math.Max(1, S(1)), brush == brushAccent ? Win32.Rgb(0, 120, 215) : Win32.Rgb(220, 227, 237))) return;
-            IntPtr pen = Win32.CreatePen(Win32.PS_SOLID, Math.Max(1, S(1)), brush == brushAccent ? Win32.Rgb(0, 120, 215) : Win32.Rgb(220, 227, 237));
+            int color = brush == brushAccent ? AccentTextColor : SmoothShapes.BrushColor(brush);
+            int stroke = Math.Max(1, S(1));
+            if (SmoothShape(hdc, rect, radius / 2.0, stroke, color)) return;
+            IntPtr pen = Win32.CreatePen(Win32.PS_SOLID, stroke, color);
             IntPtr oldPen = Win32.SelectObject(hdc, pen);
             IntPtr oldBrush = Win32.SelectObject(hdc, Win32.GetStockObject(Win32.HOLLOW_BRUSH));
             Win32.RoundRect(hdc, rect.Left, rect.Top, rect.Right, rect.Bottom, radius, radius);
@@ -2017,15 +2019,15 @@ namespace SinkLite.UI
             Win32.SelectObject(hdc, oldBrush); Win32.SelectObject(hdc, oldPen); Win32.DeleteObject(brush);
         }
 
-        private static int ToneColor(ConnectionTone tone)
+        private int ToneColor(ConnectionTone tone)
         {
             switch (tone)
             {
-                case ConnectionTone.Active: return Win32.Rgb(20, 139, 85);
-                case ConnectionTone.Ready: return Win32.Rgb(0, 120, 215);
-                case ConnectionTone.Warning: return Win32.Rgb(177, 105, 0);
-                case ConnectionTone.Error: return Win32.Rgb(196, 51, 51);
-                default: return Win32.Rgb(139, 154, 173);
+                case ConnectionTone.Active: return SuccessColor;
+                case ConnectionTone.Ready: return AccentTextColor;
+                case ConnectionTone.Warning: return WarningColor;
+                case ConnectionTone.Error: return ErrorColor;
+                default: return DisabledColor;
             }
         }
 
@@ -2102,6 +2104,9 @@ namespace SinkLite.UI
                 case AreaAutoStart: r = PreferenceRect(m, AreaAutoStart); break;
                 case AreaCloseToTray: r = PreferenceRect(m, AreaCloseToTray); break;
                 case AreaAutoConnect: r = PreferenceRect(m, AreaAutoConnect); break;
+                case AreaThemeSystem:
+                case AreaThemeLight:
+                case AreaThemeDark: r = ThemeOptionRect(m, focusArea); break;
                 default:
                     if(focusArea>=AreaHotkeyBind && focusArea<AreaHotkeyBind+4) r=HotkeyRect(m,focusArea-AreaHotkeyBind,false);
                     else if(focusArea>=AreaHotkeyClear && focusArea<AreaHotkeyClear+4) r=HotkeyRect(m,focusArea-AreaHotkeyClear,true);
@@ -2112,8 +2117,8 @@ namespace SinkLite.UI
                     else return;
                     break;
             }
-            if (SmoothShape(hdc, Rect(r.Left - S(2), r.Top - S(2), r.Right + S(2), r.Bottom + S(2)), S(10) / 2.0, S(2), Win32.Rgb(0, 120, 215))) return;
-            IntPtr pen = Win32.CreatePen(Win32.PS_SOLID, S(2), Win32.Rgb(0, 120, 215));
+            if (SmoothShape(hdc, Rect(r.Left - S(2), r.Top - S(2), r.Right + S(2), r.Bottom + S(2)), S(10) / 2.0, S(2), AccentTextColor)) return;
+            IntPtr pen = Win32.CreatePen(Win32.PS_SOLID, S(2), AccentTextColor);
             IntPtr oldPen = Win32.SelectObject(hdc, pen), oldBrush = Win32.SelectObject(hdc, Win32.GetStockObject(Win32.HOLLOW_BRUSH));
             Win32.RoundRect(hdc, r.Left - S(2), r.Top - S(2), r.Right + S(2), r.Bottom + S(2), S(10), S(10));
             Win32.SelectObject(hdc, oldPen); Win32.SelectObject(hdc, oldBrush); Win32.DeleteObject(pen);
@@ -2132,20 +2137,6 @@ namespace SinkLite.UI
         private static bool Contains(Win32.RECT r, int x, int y)
         {
             return x >= r.Left && x < r.Right && y >= r.Top && y < r.Bottom;
-        }
-
-        private static int StateColor(SinkState state)
-        {
-            switch (state)
-            {
-                case SinkState.Flowing: return Win32.Rgb(16, 150, 70);
-                case SinkState.LinkReady: return Win32.Rgb(0, 120, 215);
-                case SinkState.Armed: return Win32.Rgb(224, 150, 0);
-                case SinkState.Busy:
-                case SinkState.Backoff: return Win32.Rgb(230, 130, 30);
-                case SinkState.Faulted: return Win32.Rgb(200, 50, 50);
-                default: return Win32.Rgb(150, 150, 150);
-            }
         }
 
         private static string DescribeState(SinkState state)
@@ -2183,20 +2174,7 @@ namespace SinkLite.UI
                 Win32.DeleteObject(fontSmall);
                 Win32.DeleteObject(fontCaption);
                 Win32.DeleteObject(fontGear);
-                Win32.DeleteObject(brushBack);
-                Win32.DeleteObject(brushCard);
-                Win32.DeleteObject(brushBorder);
-                Win32.DeleteObject(brushAccent);
-                Win32.DeleteObject(brushAccentHover);
-                Win32.DeleteObject(brushAccentPress);
-                Win32.DeleteObject(brushBtn);
-                Win32.DeleteObject(brushBtnHover);
-                Win32.DeleteObject(brushBtnPress);
-                Win32.DeleteObject(brushRowHover);
-                Win32.DeleteObject(brushRowSelected);
-                Win32.DeleteObject(brushSwitchOff);
-                Win32.DeleteObject(brushSwitchOffHover);
-                Win32.DeleteObject(brushTooltip);
+                ReleaseThemeBrushes();
             }
             catch
             {

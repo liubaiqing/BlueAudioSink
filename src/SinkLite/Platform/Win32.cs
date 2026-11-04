@@ -8,6 +8,7 @@ namespace SinkLite.Platform
     /// </summary>
     internal static class Win32
     {
+        public const uint DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
         public const uint DWMWA_CAPTION_COLOR = 35;
         public const uint DWMWA_TEXT_COLOR = 36;
 

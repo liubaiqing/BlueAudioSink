@@ -35,10 +35,10 @@ namespace SinkLite.UI
                 int top = S(68+i*76), right=m.Left+m.ContentWidth;
                 var card = Rect(m.Left,top,right,top+S(70));
                 RoundFill(hdc,card,S(8),brushCard); RoundBorder(hdc,card,S(8),brushBorder);
-                Text(hdc,HotkeyLabels[i],fontBody,Win32.Rgb(23,40,63),Rect(m.Left+S(12),top+S(5),right-S(70),top+S(31)));
+                Text(hdc,HotkeyLabels[i],fontBody,TextColor,Rect(m.Left+S(12),top+S(5),right-S(70),top+S(31)));
                 var binding = hotkeys == null ? pageSettings.Hotkeys[i] : hotkeys[i];
                 if(hotkeys != null && !binding.Empty && !hotkeys.Active(i))
-                    Text(hdc,"未生效",fontSmall,Win32.Rgb(151,91,22),Rect(right-S(66),top+S(5),right-S(12),top+S(31)),true);
+                    Text(hdc,"未生效",fontSmall,WarningColor,Rect(right-S(66),top+S(5),right-S(12),top+S(31)),true);
                 DrawButton(hdc,HotkeyRect(m,i,false),recordingHotkey==i ? "请按组合键…" : binding.ToString(),AreaHotkeyBind+i,recordingHotkey==i);
                 DrawButton(hdc,HotkeyRect(m,i,true),"清除",AreaHotkeyClear+i,false);
             }

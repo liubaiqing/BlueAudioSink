@@ -2,9 +2,9 @@
 <h1 align="center">蓝音频 · BlueAudioSink</h1>
 <p align="center">英文全称 BlueAudioSink · 简称 BAS</p>
 <p align="center">手机的声音，用电脑的耳机或音箱播放。<br/>轻量 Windows 接收端，支持蓝牙与局域网 Wi-Fi。</p>
-**最新正式版：电脑 0.2.12 / Android 0.2.4**，建议双端一起更新，使用手机远程调节电脑接收音量。Wi-Fi 使用 Android 系统音频捕获授权，无需 Shizuku、root、开发者选项或 ADB
+**最新正式版：电脑 0.2.16 / Android 0.2.16**，建议双端一起更新，使用手机远程调节电脑接收音量。Wi-Fi 使用 Android 系统音频捕获授权，无需 Shizuku、root、开发者选项或 ADB
 
-<p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.2.12">下载最新版</a> · <a href="README.md">English</a> | 简体中文 · <a href="LICENSE">MIT 开源</a></p>
+<p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.2.16">下载最新版</a> · <a href="README.md">English</a> | 简体中文 · <a href="LICENSE">MIT 开源</a></p>
 
 开发作者：**liubaiqing**。双端运行截图已遮挡设备名称、局域网地址和手机状态信息；设置布局预览由实际绘制代码生成，使用示例设备。
 
@@ -20,10 +20,10 @@
 
 | 设备 | 下载 | 系统要求 |
 | --- | --- | --- |
-| 电脑 | [BlueAudioSink-0.2.12.exe](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.12/BlueAudioSink-0.2.12.exe) | Windows 10 2004+ / Windows 11，x64 |
-| 手机（仅 Wi-Fi 需要） | [BlueAudioSink-Sender-0.2.4.apk](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.12/BlueAudioSink-Sender-0.2.4.apk) | Android 10 及以上 |
+| 电脑 | [BlueAudioSink-0.2.16.exe](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/BlueAudioSink-0.2.16.exe) | Windows 10 2004+ / Windows 11，x64 |
+| 手机（仅 Wi-Fi 需要） | [BlueAudioSink-Sender-0.2.16.apk](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/BlueAudioSink-Sender-0.2.16.apk) | Android 10 及以上 |
 
-电脑双击 EXE 即可，无需安装 .NET。手机打开 APK 安装；若系统询问，允许当前打开文件的应用安装 APK。手机包为独立发布密钥签名的 Release 版本。[文件校验值](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.12/SHA256SUMS.txt)随发布提供。
+电脑双击 EXE 即可，无需安装 .NET。手机打开 APK 安装；若系统询问，允许当前打开文件的应用安装 APK。手机包为独立发布密钥签名的 Release 版本。[文件校验值](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/SHA256SUMS.txt)随发布提供。
 
 <details>
 <summary>安装过旧测试签名版？点这里</summary>
@@ -88,9 +88,7 @@
 
 蓝牙模式无需手机发送端，需电脑适配器与驱动支持。开启“自动连接”后，蓝牙会尝试连接首选手机，手机仍需实际发送音频。
 
-## 本地开发版：电脑身份记忆
-
-本地电脑 **0.2.16** / Android **0.2.16** 增加按电脑身份记忆，尚未更新到上面的 GitHub 正式版下载。本地包位于 `artifacts/BlueAudioSink-0.2.16.exe` 和 `artifacts/BlueAudioSink-Sender-0.2.16.apk`
+## 重新连接已记住的电脑
 
 首次使用通知调音量时，在手机端「设置 → 音量悬浮窗」授予显示权限。发送中点按蓝音频通知即可打开悬浮滑条。若通知栏仍展开，收起后即可拖动
 
@@ -100,9 +98,17 @@
 
 查找期间不发送音频，确认身份并连接后才可开始发送。电脑需启用 Wi-Fi 接收且网络允许局域网通信；找不到时检查同网、电脑启用状态和防火墙，旧电脑端需要更新。这里的设备身份用于记忆和避免误连，不是加密配对
 
+## 主题、手机外放和连接日志
+
+双端设置均可选择跟随系统、浅色或深色，电脑端主题位于「设置 → 常规」。
+
+Wi-Fi 连接成功时，手机媒体音量自动归零，电脑接收音量独立保留。开启手机「防误开外放」并授予无障碍权限后，可在发送时拦截实体音量加键。
+
+电脑「设置 → 连接日志」可以管理保留天数和存放目录。连接确认后，手机诊断事件会同步到电脑日志。如果首次无法连接，可在手机「设置 → 导出连接日志」保存。公开分享电脑日志前请检查设备名称和地址。
+
 ## 多台手机怎么切换？
 
-进入「设置 → 连接设备」，选择「蓝牙手机 / Wi-Fi 手机」，再点要接收的手机。Wi-Fi 手机需先在发送端选择这台电脑，并自行开始发送。一次播放一台手机。
+进入「设置 → 连接设备」，浏览「蓝牙手机 / Wi-Fi 手机」不会打断连接。要换手机，请在当前模式的列表里选择。Wi-Fi 手机需先在发送端选择这台电脑，并自行开始发送。一次播放一台手机。
 
 ![手机切换图解](docs/images/windows-devices-sidebar.png)
 

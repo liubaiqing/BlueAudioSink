@@ -31,7 +31,7 @@ namespace SinkLite.UI
         private void DrawLogSettings(IntPtr hdc, Metrics m)
         {
             int right = m.Left + m.ContentWidth;
-            int ink = Win32.Rgb(23, 40, 63);
+            int ink = TextColor;
             var retention = Rect(m.Left, S(68), right, S(124));
             RoundFill(hdc, retention, S(8), brushCard);
             RoundBorder(hdc, retention, S(8), brushBorder);
@@ -45,7 +45,7 @@ namespace SinkLite.UI
             DrawButton(hdc, LogControlRect(m, AreaLogOpen), "打开文件夹", AreaLogOpen, false);
             DrawButton(hdc, LogControlRect(m, AreaLogClear), "清理日志", AreaLogClear, false);
             if (log.WriteFailed)
-                Text(hdc, "无法写入日志，请选择可写的文件夹", fontSmall, Win32.Rgb(151, 91, 22), Rect(m.Left, S(314), right, S(342)));
+                Text(hdc, "无法写入日志，请选择可写的文件夹", fontSmall, WarningColor, Rect(m.Left, S(314), right, S(342)));
         }
 
         private void ActivateLogControl(int area)

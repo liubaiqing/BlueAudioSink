@@ -23,21 +23,21 @@ namespace SinkLite.UI
             var card=Rect(left,S(68),right,S(298));
             RoundFill(hdc,card,S(8),brushCard); RoundBorder(hdc,card,S(8),brushBorder);
             if(appIcon!=IntPtr.Zero) Win32.DrawIconEx(hdc,left+S(12),S(80),appIcon,S(32),S(32),0,IntPtr.Zero,3);
-            Text(hdc,"蓝音频",fontTitle,Win32.Rgb(23,40,63),Rect(left+S(56),S(76),right-S(12),S(108)));
-            Text(hdc,"BlueAudioSink · BAS · Windows x64",fontSmall,Win32.Rgb(88,102,122),Rect(left+S(12),S(114),right-S(12),S(136)));
+            Text(hdc,"蓝音频",fontTitle,TextColor,Rect(left+S(56),S(76),right-S(12),S(108)));
+            Text(hdc,"BlueAudioSink · BAS · Windows x64",fontSmall,SecondaryColor,Rect(left+S(12),S(114),right-S(12),S(136)));
             void Row(int top,string label,string value)
             {
-                Text(hdc,label,fontBody,Win32.Rgb(88,102,122),Rect(left+S(12),S(top),left+S(94),S(top+28)));
-                Text(hdc,value,fontBody,Win32.Rgb(23,40,63),Rect(left+S(100),S(top),right-S(12),S(top+28)));
+                Text(hdc,label,fontBody,SecondaryColor,Rect(left+S(12),S(top),left+S(94),S(top+28)));
+                Text(hdc,value,fontBody,TextColor,Rect(left+S(100),S(top),right-S(12),S(top+28)));
             }
             Row(142,"软件版本",typeof(MainWindow).Assembly.GetName().Version.ToString(3));
             Row(176,"开发作者","liubaiqing");
             Row(210,"开源协议","MIT License");
-            Text(hdc,"项目地址",fontSmall,Win32.Rgb(88,102,122),Rect(left+S(12),S(244),right-S(12),S(264)));
-            Text(hdc,"github.com/liubaiqing/BlueAudioSink",fontSmall,Win32.Rgb(0,112,194),ProjectAddressRect(m));
+            Text(hdc,"项目地址",fontSmall,SecondaryColor,Rect(left+S(12),S(244),right-S(12),S(264)));
+            Text(hdc,"github.com/liubaiqing/BlueAudioSink",fontSmall,AccentTextColor,ProjectAddressRect(m));
             DrawButton(hdc,AboutButtonRect(m,false),"项目主页",AreaProjectPage,false);
             DrawButton(hdc,AboutButtonRect(m,true),"查看协议",AreaLicensePage,false);
-            Text(hdc,"© 2026 liubaiqing",fontSmall,Win32.Rgb(111,124,141),Rect(left,S(358),right,S(380)),true);
+            Text(hdc,"© 2026 liubaiqing",fontSmall,SecondaryColor,Rect(left,S(358),right,S(380)),true);
         }
         private void OpenAboutLink(bool license)
         {

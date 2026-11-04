@@ -20,8 +20,8 @@ android {
         applicationId = "com.blueaudiosink.sender"
         minSdk = 29
         targetSdk = 34
-        versionCode = 19
-        versionName = if (providers.gradleProperty("speakerGuardTest").isPresent) "0.2.16-speaker-test" else "0.2.16"
+        versionCode = 20
+        versionName = "0.2.16"
 
         resourceConfigurations += listOf("zh")
     }
