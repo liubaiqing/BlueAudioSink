@@ -1,5 +1,7 @@
 package com.blueaudiosink.sender
 
+import com.blueaudiosink.sender.core.Diagnostics
+
 import android.app.Activity
 import android.os.Build
 import android.os.Bundle
@@ -8,15 +10,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.SideEffect
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import com.blueaudiosink.sender.capture.AudioCaptureService
 import com.blueaudiosink.sender.capture.MediaProjectionHelper
 import com.blueaudiosink.sender.core.LinkController
 import com.blueaudiosink.sender.ui.BlueAudioSinkTheme
 import com.blueaudiosink.sender.ui.SenderScreen
+import com.blueaudiosink.sender.ui.useDarkTheme
 
 /**
- * 唯一 Activity。
+ * 发送端主界面。
  *
  * 开始发送的三步（顺序不可换）：
  * 1. 申请运行时权限（录音、通知）；
@@ -43,6 +50,7 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             pendingStart = false
             val data = result.data
+            Diagnostics.record("Capture.Consent", if (result.resultCode == Activity.RESULT_OK && data != null) 1 else 0)
             if (result.resultCode == Activity.RESULT_OK && data != null) {
                 val state = LinkController.state.value
                 val intent = AudioCaptureService.startIntent(
@@ -63,7 +71,17 @@ class MainActivity : ComponentActivity() {
         LinkController.attach(this)
         LinkController.setDeviceName(deviceName())
         setContent {
-            BlueAudioSinkTheme {
+            val dark = useDarkTheme()
+            BlueAudioSinkTheme(darkTheme = dark) {
+                val barColor = MaterialTheme.colorScheme.surface.toArgb()
+                SideEffect {
+                    window.statusBarColor = barColor
+                    window.navigationBarColor = barColor
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !dark
+                        isAppearanceLightNavigationBars = !dark
+                    }
+                }
                 val state by LinkController.state.collectAsState()
                 SenderScreen(
                     state = state,
@@ -99,7 +117,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleStart() {
-        if (LinkController.state.value.targetIp.isNullOrBlank()) {
+        if (!LinkController.state.value.pcConnected || LinkController.state.value.resolving) {
             LinkController.postMessage(getString(R.string.error_no_target))
             return
         }

@@ -20,18 +20,19 @@ namespace SinkLite.UI
             recordingHotkey=index;
         }
         private string reconnectWifiPeer, reconnectWifiName;
+        private long reconnectWifiGeneration;
         private static readonly string[] HotkeyLabels = { "断开所有连接", "重连当前模式", "调高 Wi-Fi 音量", "调低 Wi-Fi 音量" };
 
         private Win32.RECT HotkeyRect(Metrics m, int index, bool clear)
         {
-            int right = m.Left + m.ContentWidth - S(12), top = S(136 + index * 76);
+            int right = m.Left + m.ContentWidth - S(12), top = S(104 + index * 76);
             return clear ? Rect(right-S(48),top,right,top+S(28)) : Rect(m.Left+S(12),top,right-S(56),top+S(28));
         }
         private void DrawHotkeys(IntPtr hdc, Metrics m)
         {
             for(int i=0;i<4;i++)
             {
-                int top = S(100+i*76), right=m.Left+m.ContentWidth;
+                int top = S(68+i*76), right=m.Left+m.ContentWidth;
                 var card = Rect(m.Left,top,right,top+S(70));
                 RoundFill(hdc,card,S(8),brushCard); RoundBorder(hdc,card,S(8),brushBorder);
                 Text(hdc,HotkeyLabels[i],fontBody,Win32.Rgb(23,40,63),Rect(m.Left+S(12),top+S(5),right-S(70),top+S(31)));
@@ -64,7 +65,7 @@ namespace SinkLite.UI
         private void RememberWifiPeer()
         {
             var current=wifi.Current;
-            if(!string.IsNullOrEmpty(current.Remote)) { reconnectWifiPeer=current.Remote; reconnectWifiName=current.DeviceName; }
+            if(!string.IsNullOrEmpty(current.Remote)) { reconnectWifiPeer=current.Remote; reconnectWifiName=current.DeviceName; reconnectWifiGeneration=current.NetworkGeneration; }
         }
         private void DisconnectWifi(string reason)
         {
@@ -76,7 +77,7 @@ namespace SinkLite.UI
             if(restart) DisconnectWifi("reconnect");
             if(wifi.Start())
             {
-                wifi.PrepareReconnect(reconnectWifiPeer,reconnectWifiName);
+                wifi.PrepareReconnect(reconnectWifiPeer,reconnectWifiName,reconnectWifiGeneration);
                 ShowNotice("Wi-Fi 已启用，等待手机响应");
             }
             else ShowNotice("Wi-Fi 无法启用，请检查端口占用");

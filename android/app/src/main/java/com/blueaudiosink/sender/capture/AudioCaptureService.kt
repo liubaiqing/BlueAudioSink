@@ -1,5 +1,7 @@
 package com.blueaudiosink.sender.capture
 
+import com.blueaudiosink.sender.core.Diagnostics
+
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
@@ -22,6 +24,7 @@ import androidx.core.content.ContextCompat
 import com.blueaudiosink.sender.MainActivity
 import com.blueaudiosink.sender.R
 import com.blueaudiosink.sender.core.LinkController
+import com.blueaudiosink.sender.ui.NotificationVolumeOverlay
 
 /**
  * 采集前台服务。
@@ -38,6 +41,7 @@ class AudioCaptureService : Service() {
 
         const val ACTION_START = "com.blueaudiosink.sender.action.START"
         const val ACTION_STOP = "com.blueaudiosink.sender.action.STOP"
+        private const val ACTION_VOLUME = "com.blueaudiosink.sender.action.VOLUME"
 
         private const val EXTRA_RESULT_CODE = "extra_result_code"
         private const val EXTRA_RESULT_DATA = "extra_result_data"
@@ -71,6 +75,7 @@ class AudioCaptureService : Service() {
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
+            Diagnostics.record("Capture.ProjectionStopped")
             // 用户点了系统「停止投放」，或系统回收了授权
             releaseCapture()
             LinkController.postMessage(getString(R.string.error_projection_stopped))
@@ -86,6 +91,8 @@ class AudioCaptureService : Service() {
         LinkController.attach(applicationContext)
         createNotificationChannel()
     }
+
+    private val volumeOverlay by lazy { NotificationVolumeOverlay(this) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -109,6 +116,10 @@ class AudioCaptureService : Service() {
                     releaseProjection()
                     startCapture(resultCode, resultData, tier, deviceName)
                 }
+            }
+
+            ACTION_VOLUME -> {
+                if (recorder != null) volumeOverlay.show() else stopSelf(startId)
             }
 
             ACTION_STOP -> {
@@ -167,7 +178,7 @@ class AudioCaptureService : Service() {
         }
         Log.i(TAG, "recorder started, sending START")
         recorder = pcmRecorder
-        LinkController.startStreaming(deviceName)
+        if (!LinkController.startStreaming(deviceName)) { releaseCapture(); stopSelf(); return }
         updateNotification(getString(R.string.notification_streaming))
     }
 
@@ -183,6 +194,7 @@ class AudioCaptureService : Service() {
 
     private fun failAndStop(message: String) {
         Log.w(TAG, "capture failed: " + message)
+        Diagnostics.record("Capture.Failed")
         LinkController.fail(message)
         releaseCapture()
         stopSelf()
@@ -195,6 +207,7 @@ class AudioCaptureService : Service() {
 
     /** 只释放采集对象，保留前台服务状态（启动新会话时使用）。 */
     private fun releaseProjection() {
+        volumeOverlay.dismiss()
         recorder?.stop()
         recorder = null
         projection?.let {
@@ -243,16 +256,18 @@ class AudioCaptureService : Service() {
 
     private fun updateNotification(text: String) {
         val manager = getSystemService(NotificationManager::class.java) ?: return
-        manager.notify(NOTIFICATION_ID, buildNotification(text))
+        manager.notify(NOTIFICATION_ID, buildNotification(text, canAdjustVolume = true))
     }
 
-    private fun buildNotification(text: String): Notification {
-        val openApp = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+    private fun buildNotification(text: String, canAdjustVolume: Boolean = false): Notification {
+        val contentAction = if (canAdjustVolume) {
+            PendingIntent.getService(this, 2,
+                Intent(this, AudioCaptureService::class.java).setAction(ACTION_VOLUME),
+                PendingIntent.FLAG_IMMUTABLE)
+        } else {
+            PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE)
+        }
         val stopAction = PendingIntent.getService(
             this,
             1,
@@ -266,7 +281,12 @@ class AudioCaptureService : Service() {
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setContentIntent(openApp)
+            .setContentIntent(contentAction)
+            .apply {
+                if (canAdjustVolume) {
+                    addAction(0, getString(R.string.action_adjust_volume), contentAction)
+                }
+            }
             .addAction(0, getString(R.string.action_stop), stopAction)
             .build()
     }

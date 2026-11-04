@@ -1,46 +1,106 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace SinkLite.Platform
 {
     /// <summary>
-    /// 极简滚动 JSONL 日志：保留 7 天，单文件上限 8 MB。
+    /// 极简滚动 JSONL 日志：按设置保留，单文件上限 8 MB。
     /// 只记录状态、耗时与错误码，不记录音频内容。
     /// </summary>
     internal sealed class Log : IDisposable
     {
         private const long MaxBytes = 8L * 1024 * 1024;
-        private const int RetainDays = 7;
+        public const int DefaultRetainDays = 90;
+        private static readonly Regex LogFileName = new Regex(@"\Asink-\d{8}(?:-\d{6}(?:-\d{3})?)?\.jsonl\z", RegexOptions.CultureInvariant);
 
         private readonly object sync = new object();
-        private readonly string directory;
+        private readonly HashSet<string> androidEventIds = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Queue<string> androidEventOrder = new Queue<string>();
+        private string directory;
+        private int retainDays;
+        private readonly Timer cleanupTimer;
+        private bool disposed;
+        public bool WriteFailed { get; private set; }
+        public string DirectoryPath { get { lock (sync) return directory; } }
         private StreamWriter writer;
         private DateTime openedDay;
         private long written;
 
-        public Log(string directory)
+        public Log(string directory, int retainDays = DefaultRetainDays)
         {
-            this.directory = directory;
+            this.directory = string.IsNullOrEmpty(directory) ? DefaultDirectory : directory;
+            this.retainDays = retainDays;
+            if (string.IsNullOrEmpty(directory)) MoveLegacyLogs();
+            CleanupExpired();
+            cleanupTimer = new Timer(_ => CleanupExpired(), null, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
+        }
+
+        private static string ExecutableDirectory => Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        public static string DefaultDirectory => Path.Combine(ExecutableDirectory, "logs");
+
+        private void MoveLegacyLogs()
+        {
             try
             {
-                Directory.CreateDirectory(directory);
-                Cleanup();
+                foreach (var file in new DirectoryInfo(ExecutableDirectory).EnumerateFiles("sink-*.jsonl"))
+                {
+                    try
+                    {
+                        if (!IsLogFile(file)) continue;
+                        Directory.CreateDirectory(directory);
+                        string destination = Path.Combine(directory, file.Name);
+                        if (File.Exists(destination))
+                        {
+                            string prefix = file.Name.Substring(0, 13) + "-" +
+                                file.LastWriteTime.ToString("HHmmss", CultureInfo.InvariantCulture);
+                            for (int index = 0; index < 1000 && File.Exists(destination); index++)
+                                destination = Path.Combine(directory, prefix + "-" + index.ToString("D3", CultureInfo.InvariantCulture) + ".jsonl");
+                        }
+                        file.MoveTo(destination);
+                    }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
             }
-            catch
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        public static string CheckDirectory(string path)
+        {
+            string fullPath = Path.GetFullPath(path);
+            Directory.CreateDirectory(fullPath);
+            string probe = Path.Combine(fullPath, ".bas-" + Guid.NewGuid().ToString("N") + ".tmp");
+            using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose)) { }
+            return fullPath;
+        }
+
+        public void Configure(string path, int days)
+        {
+            lock (sync)
             {
+                if (!string.Equals(directory, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    CloseWriter();
+                    directory = path;
+                    WriteFailed = false;
+                }
+                retainDays = days;
+                CleanupExpired();
             }
         }
 
-        public static string DefaultDirectory
+        public (int Removed, int Failed) Clear()
         {
-            get
+            lock (sync)
             {
-                return Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "BlueAudioSink",
-                    "logs");
+                CloseWriter();
+                return DeleteLogs(_ => true);
             }
         }
 
@@ -59,16 +119,33 @@ namespace SinkLite.Platform
             Write("error", eventName, fields);
         }
 
-        private void Write(string level, string eventName, (string Key, object Value)[] fields)
+        public bool WriteAndroidEvent(string id, long phoneUnixMs, string code, long a, long b, long c, uint pingToken)
+        {
+            lock (sync)
+            {
+                if (androidEventIds.Contains(id)) return true;
+                if (!Write("info", "Android." + code, new (string, object)[] {
+                    ("id", id), ("phoneUnixMs", phoneUnixMs),
+                    ("pingToken", pingToken), ("a", a), ("b", b), ("c", c) })) return false;
+                androidEventIds.Add(id);
+                androidEventOrder.Enqueue(id);
+                if (androidEventOrder.Count > 1024) androidEventIds.Remove(androidEventOrder.Dequeue());
+                return true;
+            }
+        }
+
+        private bool Write(string level, string eventName, (string Key, object Value)[] fields)
         {
             lock (sync)
             {
                 try
                 {
+                    if (disposed) return false;
                     EnsureWriter();
                     StringBuilder sb = new StringBuilder(256);
                     sb.Append("{\"ts\":\"");
                     sb.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture));
+                    sb.Append("\",\"source\":\"").Append(eventName.StartsWith("Android.", StringComparison.Ordinal) ? "Android" : "Windows");
                     sb.Append("\",\"level\":\"").Append(level);
                     sb.Append("\",\"event\":\"").Append(Escape(eventName)).Append('"');
                     if (fields != null)
@@ -83,10 +160,15 @@ namespace SinkLite.Platform
                     string line = sb.ToString();
                     writer.WriteLine(line);
                     writer.Flush();
-                    written += line.Length + 2;
+                    written += Encoding.UTF8.GetByteCount(line) + 2;
+                    WriteFailed = false;
+                    return true;
                 }
                 catch
                 {
+                    WriteFailed = true;
+                    CloseWriter();
+                    return false;
                 }
             }
         }
@@ -172,85 +254,72 @@ namespace SinkLite.Platform
 
         private void EnsureWriter()
         {
-            DateTime today = DateTime.Now.Date;
-            bool needNew = writer == null || openedDay != today || written > MaxBytes;
-            if (!needNew)
-            {
+            DateTime now = DateTime.Now;
+            if (writer != null && openedDay == now.Date && written < MaxBytes)
                 return;
-            }
 
-            if (writer != null)
-            {
-                writer.Dispose();
-                writer = null;
-            }
+            CloseWriter();
+            Directory.CreateDirectory(directory);
+            string prefix = "sink-" + now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+            string path = Path.Combine(directory, prefix + ".jsonl");
+            if (File.Exists(path) && new FileInfo(path).Length >= MaxBytes)
+                File.Move(path, Path.Combine(directory, prefix + "-" + now.ToString("HHmmss-fff", CultureInfo.InvariantCulture) + ".jsonl"));
 
-            string path = Path.Combine(directory, "sink-" + today.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + ".jsonl");
-            if (written > MaxBytes)
-            {
-                string rolled = Path.Combine(
-                    directory,
-                    "sink-" + today.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + "-" +
-                    DateTime.Now.ToString("HHmmss", CultureInfo.InvariantCulture) + ".jsonl");
-                try
-                {
-                    if (File.Exists(path))
-                    {
-                        File.Move(path, rolled);
-                    }
-                }
-                catch
-                {
-                }
-            }
-
-            writer = new StreamWriter(
-                new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read),
-                new UTF8Encoding(false));
-            openedDay = today;
-            written = 0;
+            var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
+            writer = new StreamWriter(stream, new UTF8Encoding(false));
+            openedDay = now.Date;
+            written = stream.Length;
         }
 
-        private void Cleanup()
+        private void CleanupExpired()
         {
+            lock (sync)
+            {
+                if (disposed) return;
+                DateTime now = DateTime.UtcNow;
+                DeleteLogs(file => (now - file.LastWriteTimeUtc).TotalDays >= retainDays);
+            }
+        }
+
+        private (int Removed, int Failed) DeleteLogs(Func<FileInfo, bool> shouldDelete)
+        {
+            int removed = 0, failed = 0;
             try
             {
-                DateTime cutoff = DateTime.Now.AddDays(-RetainDays);
-                foreach (string f in Directory.GetFiles(directory, "sink-*.jsonl"))
+                foreach (var file in new DirectoryInfo(directory).EnumerateFiles("sink-*.jsonl"))
                 {
                     try
                     {
-                        if (File.GetLastWriteTime(f) < cutoff)
-                        {
-                            File.Delete(f);
-                        }
+                        if (!IsLogFile(file) || !shouldDelete(file))
+                            continue;
+                        file.Delete();
+                        removed++;
                     }
-                    catch
-                    {
-                    }
+                    catch { failed++; }
                 }
             }
-            catch
-            {
-            }
+            catch (DirectoryNotFoundException) { }
+            catch { failed++; }
+            return (removed, failed);
+        }
+
+        private static bool IsLogFile(FileInfo file) =>
+            LogFileName.IsMatch(file.Name) && (file.Attributes & FileAttributes.ReparsePoint) == 0;
+
+        private void CloseWriter()
+        {
+            try { writer?.Dispose(); }
+            catch { }
+            writer = null;
         }
 
         public void Dispose()
         {
+            cleanupTimer.Dispose();
             lock (sync)
             {
-                try
-                {
-                    if (writer != null)
-                    {
-                        writer.Flush();
-                        writer.Dispose();
-                    }
-                }
-                catch
-                {
-                }
-                writer = null;
+                disposed = true;
+                CloseWriter();
             }
         }
     }

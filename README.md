@@ -1,5 +1,6 @@
 <p align="center"><img src="docs/images/app-icon.svg" width="88" height="88" alt="BlueAudioSink icon" /></p>
 <h1 align="center">BlueAudioSink</h1>
+<p align="center">Chinese name: 蓝音频 · Abbreviation: BAS</p>
 <p align="center">Your phone's audio. Your PC's speakers.<br/>A lightweight Windows receiver with Bluetooth and local-network Wi-Fi modes.</p>
 <p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.2.12">Download latest</a> · English | <a href="README.zh-CN.md">简体中文</a> · <a href="LICENSE">MIT License</a></p>
 
@@ -86,6 +87,18 @@ Click the PC Wi-Fi volume percentage to enter an integer from 0 to 100. Once con
 ![Bluetooth mode and Connect button](docs/images/bluetooth-en.png)
 
 No Android sender is needed. Adapter and driver support is required. Auto-connect attempts to connect to the preferred phone; the phone must still send audio.
+
+## Local development build: remembered PC identity
+
+Windows **0.2.16** / Android **0.2.16** add stable PC identity and address rediscovery. These local builds have not replaced the stable GitHub download above. The local packages are `artifacts/BlueAudioSink-0.2.16.exe` and `artifacts/BlueAudioSink-Sender-0.2.16.apk`
+
+Enable display over other apps once under **设置 → 音量悬浮窗** (Settings → Volume overlay). While sending, tap the sender notification to show the PC volume slider. Close the notification shade if it stays open
+
+On Android, the top-right gear opens **Device info** and **About**, including the installed version, author, project and MIT license. The main screen shows elapsed sending time instead of a packet count; it pauses during address recovery and resets when a new sending session starts
+
+Connect once by discovery or manual address, then tap the remembered PC to find its current address after changing networks. Multiple addresses for the same identity share one record. Legacy address entries require initial confirmation; after connecting, **合并旧地址记录** lets you explicitly merge other old addresses belonging to that PC. Matching names alone never merge computers
+
+Audio is blocked until identity verification and connection complete. The PC must have Wi-Fi reception enabled and LAN traffic must be permitted; identity does not bypass firewalls or provide cryptographic pairing
 
 ## Switch phones
 

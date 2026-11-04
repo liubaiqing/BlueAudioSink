@@ -1,7 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="diagnostics_export">导出连接日志</string>
+    <string name="diagnostics_saved">连接日志已保存</string>
+    <string name="diagnostics_export_failed">无法导出连接日志</string>
+    <string name="speaker_guard_title">防误开外放</string>
+    <string name="speaker_guard_summary">发送时拦截手机音量加键</string>
+    <string name="speaker_guard_permission">点击前往系统设置，开启蓝音频的无障碍服务</string>
+    <string name="speaker_guard_description">向电脑发送音频时拦截手机音量加键。停止发送后恢复按键。不读取屏幕内容。</string>
+    <string name="speaker_guard_unavailable">无法打开无障碍设置</string>
     <!-- 应用 -->
-    <string name="app_name">蓝音频 · 发送端</string>
+    <string name="app_name">BlueAudioSink</string>
+    <string name="brand_chinese_name">蓝音频</string>
+    <string name="brand_english_name">BlueAudioSink · BAS</string>
     <string name="default_device_name">Android 手机</string>
 
     <!-- 状态 -->
@@ -30,14 +40,30 @@
 
     <!-- 底部指标 -->
     <string name="stats_loss">丢包率</string>
-    <string name="stats_packets">已发送</string>
+    <string name="stats_duration">发送时长</string>
+    <string name="settings_title">设置</string>
+    <string name="local_device_title">本机信息</string>
+    <string name="about_title">关于</string>
+    <string name="action_back">返回</string>
+    <string name="local_model">设备型号</string>
+    <string name="local_android">系统版本</string>
+    <string name="local_address">局域网地址</string>
+    <string name="local_no_network">未连接局域网</string>
+    <string name="about_subtitle">Wi-Fi 音频发送 · Android</string>
+    <string name="about_version">软件版本</string>
+    <string name="about_author">开发作者</string>
+    <string name="about_license">开源协议</string>
+    <string name="about_project">项目地址</string>
+    <string name="about_open_project">项目主页</string>
+    <string name="about_open_license">查看协议</string>
+    <string name="error_open_link">无法打开链接，请检查默认浏览器</string>
 
     <!-- 通知 -->
     <string name="notification_channel_name">音频发送</string>
     <string name="notification_channel_desc">显示当前音频采集与发送状态</string>
     <string name="notification_title">音频发送中</string>
     <string name="notification_capturing">正在建立采集…</string>
-    <string name="notification_streaming">正在向电脑发送音频</string>
+    <string name="notification_streaming">正在向电脑发送音频，点按调节音量</string>
 
     <!-- 错误与提示 -->
     <string name="error_no_target">请先选择电脑</string>
@@ -51,8 +77,18 @@
     <string name="error_recorder_build">无法创建音频采集器</string>
     <string name="error_recorder_start">音频采集启动失败</string>
     <string name="error_recorder_read">音频采集中断</string>
-    <string name="developer_credit">开发作者：liubaiqing</string>
     <string name="pc_receive_volume">电脑接收音量</string>
+    <string name="action_adjust_volume">调节音量</string>
+    <string name="action_done">完成</string>
+    <string name="overlay_volume_settings">音量悬浮窗</string>
+    <string name="theme_settings">主题</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="overlay_volume_permission">请在蓝音频设置 → 音量悬浮窗中开启权限</string>
+    <string name="overlay_volume_unavailable">无法显示音量悬浮窗</string>
     <string name="pc_volume_disconnected">连接电脑后可调节</string>
     <string name="pc_volume_waiting">等待同步，请确认电脑端已更新</string>
+    <string name="device_saved_unnamed">已保存的电脑</string>
+    <string name="device_unnamed">未命名电脑</string>
 </resources>

@@ -32,6 +32,9 @@ namespace SinkLite.Core
         public const byte TypeOffer = 6;
         public const byte TypeHello = 7;
         public const byte TypeVolumeGet = 8, TypeVolumeSet = 9, TypeVolumeState = 10;
+        public const byte TypeIdentityQuery = 11, TypeIdentityReply = 12;
+        public const byte TypeDiagnostics = 13, TypeDiagnosticsAck = 14;
+        public const byte FlagDiagnostics = 2;
 
         /// <summary>flags bit0：断流标记。</summary>
         public const byte FlagDiscontinuity = 0x01;
@@ -99,7 +102,7 @@ namespace SinkLite.Core
 
         /// <summary>
         /// OFFER：设备名 UTF-8 + 0x00 + 4 字节音频端口(u32 小端)。
-        /// 每 2 秒向 255.255.255.255:45678 广播一次。
+        /// 每 2 秒向局域网广播及同子网网关发送，目标端口 45678。
         /// </summary>
         public static byte[] BuildOffer(string deviceName, int audioPort)
         {

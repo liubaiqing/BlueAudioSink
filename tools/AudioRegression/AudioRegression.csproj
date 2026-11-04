@@ -8,7 +8,10 @@
     <Compile Include="../../src/SinkLite/Core/AudioOutput.cs" Link="AudioOutput.cs" />
     <Compile Include="../../src/SinkLite/Core/WifiReceiver.cs" Link="WifiReceiver.cs" />
     <Compile Include="../../src/SinkLite/Core/WifiVolumeControl.cs" Link="WifiVolumeControl.cs" />
+    <Compile Include="../../src/SinkLite/Core/WifiIdentity.cs" Link="WifiIdentity.cs" />
     <Compile Include="../../src/SinkLite/Core/WifiTransport.cs" Link="WifiTransport.cs" />
+    <Compile Include="../../src/SinkLite/Core/WifiDiscoveryTargets.cs" Link="WifiDiscoveryTargets.cs" />
+    <Compile Include="../../src/SinkLite/Core/WifiLanAddresses.cs" Link="WifiLanAddresses.cs" />
     <Compile Include="../../src/SinkLite/Core/WifiController.cs" Link="WifiController.cs" />
     <Compile Include="../../src/SinkLite/Ui/ConnectionPresentation.cs" Link="ConnectionPresentation.cs" />
     <Compile Include="../../src/SinkLite/Ui/TrayPresentation.cs" Link="TrayPresentation.cs" />

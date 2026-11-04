@@ -1,7 +1,9 @@
 package com.blueaudiosink.sender.core
 
 import android.content.Context
+import android.media.AudioManager
 import android.os.SystemClock
+import android.util.Log
 import com.blueaudiosink.sender.capture.BufferTier
 import com.blueaudiosink.sender.net.DiscoveredDevice
 import com.blueaudiosink.sender.net.DiscoveryClient
@@ -10,6 +12,7 @@ import com.blueaudiosink.sender.net.UdpSender
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 
 /**
@@ -68,6 +71,7 @@ object LinkController : UdpSender.Listener {
 
     fun attach(context: Context) {
         val app = context.applicationContext
+        Diagnostics.attach(app)
         appContext = app
         if (savedStore == null) {
             synchronized(this) {
@@ -112,42 +116,28 @@ object LinkController : UdpSender.Listener {
 
     // ---------------------------------------------------------------- 连接
 
-    /** 选择/输入目标电脑。HELLO 让 PC 先认识我们的源地址，从而开始发 PING。 */
+    private var forgottenId: String? = null
+    private var legacyToUpgrade: String? = null
     fun connect(ip: String, port: Int = PacketCodec.DEFAULT_AUDIO_PORT): Boolean {
-        val host = ip.trim()
-        if (host.isEmpty()) {
-            postMessage("请输入电脑 IP")
-            return false
-        }
-        if (!ensureSocket()) {
-            postMessage("网络初始化失败：无法监听 45678 端口")
-            return false
-        }
-        val udp = sender ?: return false
-        val audioPort = if (port in 1..65_535) port else PacketCodec.DEFAULT_AUDIO_PORT
-        if (!udp.setTarget(host, audioPort)) return false
-
-        lastPingAtMs = 0
-        pingReceived = 0
-        pingMissed = 0
-        // 新目标：首个 PING 到达时重新写入记忆（刷新「最近使用」时间）
-        savedForIp = null
-
-        val knownName = _state.value.devices.firstOrNull { it.ip == host }?.name
-            ?: _state.value.savedDevices.firstOrNull { it.ip == host }?.name
-        _state.update {
-            it.copy(
-                pcConnected = false,
-                targetIp = host,
-                targetPort = audioPort,
-                targetName = knownName ?: host,
-                rttMs = -1,
-                lossPermille = 0,
-                phase = LinkPhase.IDLE,
-            )
-        }
-        udp.sendHello(deviceName)
+        val saved=_state.value.savedDevices.firstOrNull { it.key==ip }
+        val found=_state.value.devices.firstOrNull { (it.deviceId?.let { id->"id:$id" } ?: "ip:${it.ip}")==ip || it.ip==ip }
+        val host=saved?.ip ?: found?.ip ?: ip.removePrefix("ip:").trim()
+        if (host.isEmpty() || host.startsWith("id:")) { postMessage("请输入电脑 IPv4 地址");return false }
+        if (!ensureSocket()) { postMessage("网络初始化失败：无法监听45678端口");return false }
+        val id=saved?.deviceId ?: found?.deviceId
+        forgottenId=null
+        legacyToUpgrade=saved?.takeIf { it.deviceId==null }?.key
+        savedForIp=null;lastPingAtMs=0;pingReceived=0;pingMissed=0
+        _state.update { it.copy(targetDeviceId=id,targetName=saved?.name ?: found?.name ?: host,
+            targetIp=null,targetPort=port,pcConnected=false,resolving=true,phase=if(streaming) LinkPhase.STREAMING else LinkPhase.IDLE) }
+        sender?.selectDevice(id,(listOf(found?.ip,host).filterNotNull()+(saved?.addresses ?: emptyList())).distinct())
         return true
+    }
+
+    fun mergeLegacy(keys: Set<String>) {
+        val id=_state.value.targetDeviceId ?: return
+        val records=savedStore?.mergeLegacy(id,keys) ?: return
+        _state.update { it.copy(savedDevices=records) }
     }
 
     fun disconnect() {
@@ -160,10 +150,12 @@ object LinkController : UdpSender.Listener {
                 phase = LinkPhase.IDLE,
                 pcConnected = false,
                 targetIp = null,
+                targetDeviceId = null, resolving = false,
                 targetName = null,
                 rttMs = -1,
                 lossPermille = 0,
                 packetsSent = 0,
+                sendingSeconds = sender?.sendingSeconds() ?: it.sendingSeconds,
             )
         }
         releaseSocketIfIdle()
@@ -180,49 +172,49 @@ object LinkController : UdpSender.Listener {
         val remaining = store.remove(host)
         // 删的正是当前连接时，本会话内不再自动写回：否则下一个 PING（2 秒内）又把它存回来。
         // 用户重新点一次该设备（connect 会清空 savedForIp）才会再次记住。
-        if (host == _state.value.targetIp) savedForIp = host
+        if (host == (_state.value.targetDeviceId?.let { "id:$it" } ?: "ip:${_state.value.targetIp}")) {
+            savedForIp = _state.value.targetIp; legacyToUpgrade=null; forgottenId=_state.value.targetDeviceId
+        }
         _state.update { it.copy(savedDevices = remaining) }
     }
 
     // ---------------------------------------------------------------- 发送（由前台服务驱动）
 
     /** 采集已就绪：发 HELLO + START，seq 归零，随后保持 200 包/秒。 */
-    fun startStreaming(name: String) {
+    fun startStreaming(name: String): Boolean {
         if (!ensureSocket()) {
             fail("网络初始化失败：无法监听 45678 端口")
-            return
+            return false
         }
-        val udp = sender ?: return
+        val udp = sender ?: return false
         val current = _state.value
-        if (!udp.hasTarget()) {
-            val ip = current.targetIp
-            if (ip.isNullOrBlank()) {
-                fail("尚未连接电脑，无法开始发送")
-                return
-            }
-            if (!udp.setTarget(ip, current.targetPort)) {
-                fail("目标地址无效：" + ip)
-                return
-            }
+        if (!udp.hasTarget() || !current.pcConnected || current.resolving) {
+            fail("请先连接并确认电脑身份，再开始发送")
+            return false
         }
+        udp.resetSendDuration()
         streaming = true
         pendingPackets = 0
         pingReceived = 0
         pingMissed = 0
         _state.update {
-            it.copy(phase = LinkPhase.STREAMING, pcConnected = pingFresh(), packetsSent = 0, rttMs = -1, lossPermille = 0)
+            it.copy(phase = LinkPhase.STREAMING, pcConnected = pingFresh(), packetsSent = 0, sendingSeconds = 0, rttMs = -1, lossPermille = 0)
         }
         udp.sendHello(name.ifBlank { deviceName })
         udp.sendStart()
+        Diagnostics.record("Capture.Start")
+        return true
     }
 
     /** 采集结束：发 STOP（不重传），PC 5 秒超时兜底。 */
     fun stopStreaming() {
+        if (streaming) Diagnostics.record("Capture.Stop")
         if (streaming) sender?.sendStop()
         streaming = false
         pendingPackets = 0
         _state.update {
-            it.copy(phase = if (pingFresh()) LinkPhase.CONNECTED else LinkPhase.IDLE, pcConnected = pingFresh())
+            it.copy(phase = if (pingFresh()) LinkPhase.CONNECTED else LinkPhase.IDLE, pcConnected = pingFresh(),
+                sendingSeconds = sender?.sendingSeconds() ?: it.sendingSeconds)
         }
         releaseSocketIfIdle()
     }
@@ -241,17 +233,21 @@ object LinkController : UdpSender.Listener {
 
     // ---------------------------------------------------------------- UdpSender.Listener
 
-    override fun onOffer(device: DiscoveredDevice) {
-        discovery?.offer(device)
-        if (device.ip == _state.value.targetIp) {
-            sender?.setTarget(device.ip, device.port)
-            _state.update { it.copy(targetName = device.name, targetPort = device.port) }
-            // 已保存的设备拿到真实名称后同步更新（名称比 IP 更好认）；
-            // 只在它确实还在记忆列表里时更新，避免刚删掉的设备被一次广播写回来。
-            if (_state.value.savedDevices.any { it.ip == device.ip }) {
-                rememberTarget(device.ip, device.port, device.name, refresh = true)
-            }
-        }
+    override fun onOffer(device: DiscoveredDevice) { discovery?.offer(device) }
+    override fun onResolving(active: Boolean, error: String?) {
+        if (active) Diagnostics.record("Wifi.Resolve")
+        if (error != null) Diagnostics.record("Wifi.ResolveFailed")
+        if(active) { lastPingAtMs=0; savedForIp=null }
+        _state.update { it.copy(resolving=active,pcConnected=false,
+            phase=if(streaming) LinkPhase.STREAMING else LinkPhase.IDLE) }
+        if(error!=null) postMessage(error)
+    }
+    override fun onResolved(device: DiscoveredDevice) {
+        Diagnostics.record("Wifi.IdentityConfirmed", device.port.toLong())
+        _state.update { it.copy(targetIp=device.ip,targetPort=device.port,targetName=device.name,
+            targetDeviceId=device.deviceId,resolving=false,pcConnected=false) }
+        sender?.sendHello(deviceName)
+        if(streaming) sender?.sendStart()
     }
 
     override fun onPing(t1Us: Int, receivedAtUs: Int) {
@@ -271,7 +267,7 @@ object LinkController : UdpSender.Listener {
             val current = _state.value
             rememberTarget(current.targetIp.orEmpty(), current.targetPort, current.targetName)
         }
-        _state.update {
+        val previous = _state.getAndUpdate {
             it.copy(
                 phase = when {
                     streaming -> LinkPhase.STREAMING
@@ -281,6 +277,13 @@ object LinkController : UdpSender.Listener {
                 pcConnected = hasTarget,
                 lossPermille = lossPermille(),
             )
+        }
+        if (hasTarget && !previous.pcConnected && !previous.resolving) {
+            Diagnostics.record("Wifi.Connected")
+            runCatching {
+                appContext?.getSystemService(AudioManager::class.java)
+                    ?.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            }.onFailure { Log.w("BasLink", "Could not mute phone media on Wi-Fi connection", it) }
         }
     }
 
@@ -323,7 +326,7 @@ object LinkController : UdpSender.Listener {
      * 把当前目标写入本地记忆。
      *
      * 触发时机：首次收到 PC 的 PING（= 连接成功）。
-     * 同一 IP 只写一次；[refresh] 用于发现到同名设备时更新名称。
+     * 本次确认的地址只写一次；身份由当前握手提供，OFFER不直接落盘。
      */
     private fun rememberTarget(ip: String, port: Int, name: String?, refresh: Boolean = false) {
         val host = ip.trim()
@@ -336,7 +339,10 @@ object LinkController : UdpSender.Listener {
             if (existing != null && existing.name == label && existing.port == port) return
         }
         savedForIp = host
-        val saved = store.remember(label, host, port)
+        val id=_state.value.targetDeviceId ?: return
+        if(id==forgottenId) return
+        val saved = store.remember(label, host, port,id,legacyToUpgrade)
+        legacyToUpgrade=null
         _state.update { it.copy(savedDevices = saved) }
     }
 
@@ -356,7 +362,7 @@ object LinkController : UdpSender.Listener {
     }
 
     private fun releaseSocketIfIdle() {
-        if (streaming || discoveryActive) return
+        if (streaming || discoveryActive || _state.value.targetDeviceId!=null || _state.value.resolving) return
         sender?.close()
         _state.update { it.copy(pcConnected = false, phase = LinkPhase.IDLE) }
         sender = null
@@ -374,7 +380,12 @@ object LinkController : UdpSender.Listener {
                     break
                 }
                 if (lastPingAtMs > 0 && !pingFresh()) {
-                    _state.update { it.copy(pcConnected = false, phase = if (streaming) LinkPhase.STREAMING else LinkPhase.IDLE) }
+                    Diagnostics.record("Wifi.HeartbeatTimeout")
+                    lastPingAtMs=0
+                    sender?.suspendIdentity()
+                }
+                if (streaming) sender?.sendingSeconds()?.let { seconds ->
+                    _state.update { if (streaming) it.copy(sendingSeconds = seconds) else it }
                 }
             }
         }, "link-watchdog").apply {

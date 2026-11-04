@@ -87,8 +87,9 @@ namespace SinkLite
             // WinRT 需要初始化 COM 单元；在后台线程上 MTA 是安全选择。
             WinRtCompat.Initialize();
 
-            log = new Log(Log.DefaultDirectory);
             Settings settings = Settings.Load();
+            using var runLog = new Log(settings.LogDirectory, settings.LogRetainDays);
+            log = runLog;
             Policy policy = Policy.Default;
             if (settings.SampleSeconds >= 1)
             {

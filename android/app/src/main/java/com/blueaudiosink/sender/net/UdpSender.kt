@@ -1,8 +1,16 @@
 package com.blueaudiosink.sender.net
 
+import com.blueaudiosink.sender.core.Diagnostics
+
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkRequest
+import android.net.NetworkCapabilities
+import android.net.LinkProperties
 import android.os.SystemClock
+import com.blueaudiosink.sender.core.SendDuration
 import android.util.Log
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -27,6 +35,8 @@ import java.util.concurrent.Executors
 class UdpSender(context: Context) {
 
     interface Listener {
+        fun onResolving(active: Boolean, error: String?)
+        fun onResolved(device: DiscoveredDevice)
         fun onOffer(device: DiscoveredDevice)
         fun onPing(t1Us: Int, receivedAtUs: Int)
         fun onRemoteVolume(percent: Int?, ready: Boolean)
@@ -59,9 +69,17 @@ class UdpSender(context: Context) {
     @Volatile
     private var running: Boolean = false
 
+    private val sendDuration = SendDuration { SystemClock.elapsedRealtime() }
+    fun resetSendDuration() = sendDuration.reset()
+    fun sendingSeconds(): Long = sendDuration.milliseconds() / 1000
+
     /** START 已发出后才允许 AUDIO。 */
     @Volatile
     private var audioEnabled: Boolean = false
+        set(value) {
+            sendDuration.setActive(value)
+            field = value
+        }
 
     @Volatile
     private var closed: Boolean = false
@@ -91,7 +109,92 @@ class UdpSender(context: Context) {
         changed = { percent, ready -> listener?.onRemoteVolume(percent, ready) },
     )
 
-    fun setRemoteVolume(percent: Int) = remoteVolume.set(percent, SystemClock.elapsedRealtime())
+    private var identityVerified = false
+    private var generation = 0L
+    private var pingDeadline = 0L
+    private var nextHello = 0L
+    private var helloName = "Android 手机"
+    private var networkSignature = DiscoveryTargets.signature()
+    private var nextNetworkCheck = 0L
+    private var nextOfferDiagnostic = 0L
+    private var nextSendDiagnostic = 0L
+    private val connectivity=appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private val wifiNetworks=mutableSetOf<Long>()
+    private val networkCallback=object: ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = changed(network.networkHandle,true)
+        override fun onLost(network: Network) = changed(network.networkHandle,false)
+        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = changed(null,false)
+        private fun changed(handle: Long?, available: Boolean) { if(!closed) runCatching {
+            controlExecutor.execute { synchronized(sendLock) { if(!closed) {
+                val changed = handle?.let { if(available) wifiNetworks.add(it) else wifiNetworks.remove(it) } ?: false
+                checkNetwork(changed)
+            } } }
+        } }
+    }
+    private val resolver = IdentityResolver(
+        send = { payload, host ->
+            val destinations = if (host == null) DiscoveryTargets.addresses() else {
+                val initial = payload.copyOfRange(16,48).all { it == 0.toByte() }
+                if (initial || DiscoveryTargets.isLocal(host)) setOf(host) else emptySet()
+            }
+            val bytes = PacketCodec.build(PacketCodec.TYPE_IDENTITY_QUERY,0,0,payload,payload.size)
+            destinations.forEach { destination -> try {
+                val address = InetAddress.getByName(destination)
+                socket?.send(DatagramPacket(bytes,bytes.size,address,PacketCodec.CONTROL_PORT))
+            } catch (_: Exception) {} }
+        },
+        verified = { device ->
+            setTarget(device.ip,device.port); identityVerified = true
+            pingDeadline=SystemClock.elapsedRealtime()+10000;nextHello=0
+            listener?.onResolved(device)
+        },
+        status = { active, error -> listener?.onResolving(active,error) },
+    )
+    fun selectDevice(id: String?, addresses: List<String>) = synchronized(sendLock) {
+        if (audioEnabled && identityVerified) {
+            val address=cachedAddress;val port=targetPort;val oldSocket=socket
+            if(address!=null) controlExecutor.execute { runCatching {
+                val stop=PacketCodec.build(PacketCodec.TYPE_STOP,0,0,null,0)
+                oldSocket?.send(DatagramPacket(stop,stop.size,address,port))
+            } }
+        }
+        invalidateIdentity()
+        resolver.select(id,addresses,SystemClock.elapsedRealtime())
+    }
+    fun suspendIdentity() = synchronized(sendLock) {
+        invalidateIdentity(); resolver.restart(SystemClock.elapsedRealtime())
+    }
+    private fun invalidateIdentity() {
+        diagnosticsBatch = null
+        generation++; identityVerified=false; audioEnabled=false
+        targetHost=null; cachedAddress=null; pingDeadline=0; remoteVolume.reset(false)
+    }
+    private fun checkNetwork(force: Boolean = false) {
+        val signature=DiscoveryTargets.signature()
+        if (force || signature != networkSignature) {
+            Diagnostics.record("Wifi.NetworkChanged", DiscoveryTargets.lans().size.toLong())
+            networkSignature=signature; invalidateIdentity(); resolver.restart(SystemClock.elapsedRealtime())
+        }
+    }
+    private fun controlTick() = synchronized(sendLock) {
+        if (closed) return@synchronized
+        try {
+            val now=SystemClock.elapsedRealtime()
+            if(now>=nextNetworkCheck) { nextNetworkCheck=now+1000; checkNetwork() }
+            resolver.tick(now)
+            if(identityVerified && pingDeadline>0) {
+                if(now>=pingDeadline) {
+                    Diagnostics.record("Wifi.FirstPingTimeout")
+                    invalidateIdentity();resolver.fail("电脑身份已确认，但连接无回应，请检查电脑防火墙放行");return@synchronized
+                }
+                if(now>=nextHello) { nextHello=now+1000;val name=helloName.toByteArray(Charsets.UTF_8);sendLocked(PacketCodec.TYPE_HELLO,0,name,name.size) }
+            }
+            if(identityVerified) remoteVolume.tick(now)
+        } catch(e: Exception) { Log.w(TAG,"control tick failed",e) }
+    }
+    fun setRemoteVolume(percent: Int) = synchronized(sendLock) {
+        if(identityVerified) remoteVolume.set(percent, SystemClock.elapsedRealtime())
+    }
 
     /** 绑定 45678 并开始收包。重复调用安全。 */
     fun open(): Boolean {
@@ -105,13 +208,16 @@ class UdpSender(context: Context) {
             }
         } catch (e: Exception) {
             Log.w(TAG, "bind 45678 failed", e)
+            Diagnostics.record("Wifi.BindFailed", PacketCodec.CONTROL_PORT.toLong())
             listener?.onError("端口 45678 被占用")
             return false
         }
         socket = sock
-        controlExecutor.scheduleAtFixedRate({ remoteVolume.tick(SystemClock.elapsedRealtime()) }, 0, 100, TimeUnit.MILLISECONDS)
+        Diagnostics.record("Wifi.Bound", PacketCodec.CONTROL_PORT.toLong())
+        controlExecutor.scheduleAtFixedRate({ controlTick() }, 0, 100, TimeUnit.MILLISECONDS)
         running = true
         acquireMulticastLock()
+        runCatching { connectivity?.registerNetworkCallback(NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(),networkCallback) }
         receiveThread = Thread({ receiveLoop() }, "udp-recv").apply {
             isDaemon = true
             start()
@@ -124,7 +230,7 @@ class UdpSender(context: Context) {
     /** 关闭 socket；先让已排队的 STOP 发完（同一 executor 保证顺序）。 */
     fun close() {
         if (closed) return
-        remoteVolume.reset(false)
+        synchronized(sendLock) { invalidateIdentity(); resolver.clear() }
         closed = true
         running = false
         audioEnabled = false
@@ -138,6 +244,7 @@ class UdpSender(context: Context) {
             }
             releaseMulticastLock()
         }
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
         controlExecutor.shutdown()
     }
 
@@ -153,7 +260,8 @@ class UdpSender(context: Context) {
         return true
     }
 
-    fun clearTarget() {
+    fun clearTarget() = synchronized(sendLock) {
+        invalidateIdentity(); resolver.clear()
         remoteVolume.reset(false)
         targetHost = null
         targetPort = PacketCodec.DEFAULT_AUDIO_PORT
@@ -164,28 +272,33 @@ class UdpSender(context: Context) {
 
     /** START：重置 seq 基线为 0，不重传；发送完成后才开启 AUDIO。 */
     fun sendStart(onSent: (() -> Unit)? = null) {
+        val requestedGeneration = synchronized(sendLock) { generation }
         controlExecutor.execute {
             synchronized(sendLock) {
+                if (!identityVerified || requestedGeneration != generation) return@execute
                 seq = 0
                 sendControlLocked(PacketCodec.TYPE_START)
+                audioEnabled = true
             }
-            audioEnabled = true
             onSent?.invoke()
         }
     }
 
     fun sendStop() {
+        val requestedGeneration=synchronized(sendLock) { generation }
         audioEnabled = false
         controlExecutor.execute {
-            synchronized(sendLock) { sendControlLocked(PacketCodec.TYPE_STOP) }
+            synchronized(sendLock) { if(requestedGeneration==generation) sendControlLocked(PacketCodec.TYPE_STOP) }
         }
     }
 
     fun sendHello(deviceName: String) {
+        helloName=deviceName
         val bytes = deviceName.toByteArray(Charsets.UTF_8)
+        val requestedGeneration=synchronized(sendLock) { generation }
         controlExecutor.execute {
             synchronized(sendLock) {
-                sendLocked(PacketCodec.TYPE_HELLO, 0, bytes, bytes.size)
+                if(requestedGeneration==generation) sendLocked(PacketCodec.TYPE_HELLO, 0, bytes, bytes.size)
             }
         }
     }
@@ -194,10 +307,16 @@ class UdpSender(context: Context) {
     fun sendAudio(payload: ByteArray, length: Int, timestampUs: Int, discontinuity: Boolean) {
         if (!audioEnabled) return
         synchronized(sendLock) {
+            if (!identityVerified || !audioEnabled) return
             val sock = socket ?: return
             val address = resolveTarget() ?: return
             val flags = if (discontinuity) PacketCodec.FLAG_DISCONTINUITY else 0
             val packetSeq = seq++ // Consume source time even if send fails.
+            val now = SystemClock.elapsedRealtime()
+            if (now >= nextSendDiagnostic) {
+                nextSendDiagnostic = now + 10_000
+                Diagnostics.recordAsync("Wifi.SendStats", packetSeq.toLong(), sendFailures, targetPort.toLong())
+            }
             PacketCodec.writeHeader(frameBuffer, PacketCodec.TYPE_AUDIO, flags, packetSeq, timestampUs)
             System.arraycopy(payload, 0, frameBuffer, PacketCodec.HEADER_SIZE, length)
             try {
@@ -241,17 +360,29 @@ class UdpSender(context: Context) {
             if (!PacketCodec.isValid(buffer, length)) continue
             when (PacketCodec.typeOf(buffer, length)) {
                 PacketCodec.TYPE_OFFER -> handleOffer(packet, buffer)
-                PacketCodec.TYPE_PING -> if (isSelectedPc(packet)) handlePing(packet, buffer)
-                PacketCodec.TYPE_VOLUME_STATE -> if (isSelectedPc(packet) && length == 30) {
-                    remoteVolume.receive(buffer.copyOfRange(16, 30), PacketCodec.seqOf(buffer, length), SystemClock.elapsedRealtime())
+                PacketCodec.TYPE_IDENTITY_REPLY -> synchronized(sendLock) {
+                    resolver.reply(packet.address.hostAddress ?: "",packet.port,buffer.copyOfRange(16,length),SystemClock.elapsedRealtime())
                 }
+                PacketCodec.TYPE_PING -> synchronized(sendLock) { if (isSelectedPc(packet)) handlePing(packet, buffer) }
+                PacketCodec.TYPE_DIAGNOSTICS_ACK -> synchronized(sendLock) {
+                    val batch = diagnosticsBatch
+                    if (batch != null && isSelectedPc(packet) && length == PacketCodec.HEADER_SIZE &&
+                        PacketCodec.seqOf(buffer, length) == batch.sequence &&
+                        PacketCodec.timestampOf(buffer, length) == diagnosticsPing) {
+                        Diagnostics.acknowledge(batch)
+                        diagnosticsBatch = null
+                    }
+                }
+                PacketCodec.TYPE_VOLUME_STATE -> synchronized(sendLock) { if (isSelectedPc(packet) && length == 30) {
+                    remoteVolume.receive(buffer.copyOfRange(16, 30), PacketCodec.seqOf(buffer, length), SystemClock.elapsedRealtime())
+                } }
                 else -> Unit
             }
         }
     }
 
     private fun isSelectedPc(packet: DatagramPacket): Boolean =
-        packet.port == PacketCodec.CONTROL_PORT && packet.address?.hostAddress == targetHost
+        identityVerified && packet.port == PacketCodec.CONTROL_PORT && packet.address?.hostAddress == targetHost
 
     private fun handleOffer(packet: DatagramPacket, buffer: ByteArray) {
         val length = packet.length
@@ -271,12 +402,22 @@ class UdpSender(context: Context) {
             ip = ip,
             port = if (port in 1..65_535) port else PacketCodec.DEFAULT_AUDIO_PORT,
             lastSeenMs = SystemClock.elapsedRealtime(),
+            deviceId = if (portOffset > 0 && length == portOffset+36)
+                String(buffer,portOffset+4,32,Charsets.US_ASCII).takeIf(IdentityResolver::validId) else null,
         )
+        synchronized(sendLock) {
+            if (device.lastSeenMs >= nextOfferDiagnostic) {
+                nextOfferDiagnostic = device.lastSeenMs + 15_000
+                Diagnostics.record("Wifi.OfferReceived", device.port.toLong(), if (device.deviceId == null) 0 else 1)
+            }
+            resolver.hint(device)
+        }
         listener?.onOffer(device)
     }
 
     /** PC 发起的探测：payload 空，header.timestampUs = T1（PC 发送时刻）。 */
     private fun handlePing(packet: DatagramPacket, buffer: ByteArray) {
+        pingDeadline=0
         val t1 = PacketCodec.timestampOf(buffer, packet.length)
         val receiveUs = (SystemClock.elapsedRealtimeNanos() / 1000L).toInt()
         val pong = PacketCodec.build(
@@ -293,7 +434,18 @@ class UdpSender(context: Context) {
             listener?.onError("回送 PONG 失败：" + (e.message ?: e.javaClass.simpleName))
         }
         listener?.onPing(t1, receiveUs)
+        if (PacketCodec.flagsOf(buffer, packet.length) and PacketCodec.FLAG_DIAGNOSTICS != 0) {
+            val batch = diagnosticsBatch ?: Diagnostics.batch()?.also { diagnosticsBatch = it } ?: return
+            diagnosticsPing = t1
+            val payload = batch.payload
+            if (payload.size > 1100) return
+            val diagnostic = PacketCodec.build(PacketCodec.TYPE_DIAGNOSTICS, batch.sequence, t1, payload, payload.size)
+            runCatching { socket?.send(DatagramPacket(diagnostic, diagnostic.size, packet.address, packet.port)) }
+        }
     }
+
+    private var diagnosticsBatch: Diagnostics.Batch? = null
+    private var diagnosticsPing = 0
 
     private fun intToBytes(value: Int): ByteArray {
         val out = ByteArray(4)
@@ -306,6 +458,7 @@ class UdpSender(context: Context) {
     }
 
     private fun sendLocked(type: Int, timestampUs: Int, payload: ByteArray?, payloadLength: Int) {
+        if (!identityVerified) return
         val sock = socket ?: return
         val address = resolveTarget() ?: return
         val packetBytes = PacketCodec.build(type, 0, timestampUs, payload, payloadLength)

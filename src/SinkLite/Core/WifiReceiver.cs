@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using SinkLite.Platform;
 
@@ -69,6 +71,7 @@ namespace SinkLite.Core
         private int baseMs;
         private int maxMs;
         private readonly string deviceName;
+        private string identity;
         private readonly Stopwatch clock = Stopwatch.StartNew();
 
         private readonly Dictionary<uint, AudioFrame> reorder = new Dictionary<uint, AudioFrame>();
@@ -158,6 +161,21 @@ namespace SinkLite.Core
                 lastAnyTicks = clock.ElapsedTicks; lastPongTicks = 0;
                 RememberPeerLocked(peer, lastAnyTicks, name);
                 detail = "正在重新探测手机";
+            }
+        }
+
+        public void ResetNetworkPeers()
+        {
+            lock(sync)
+            {
+                GoArmedLocked("网络已切换，等待手机重新连接");
+                selectedPeer=remote=null; remoteName=null; peers.Clear();
+                lastAnyTicks=0; lastPingSendUs=0;
+                volumePeer=null;
+                remoteVolume.Update(outputOptions.VolumePercent,outputOptions.Exclusive,true);
+                lossWindow.Clear();
+                received=missing=duplicates=late=resets=underruns=discontinuities=dropped=stale=0;
+                gapPending=malformedPending=underrunPending=rebufferPending=0;
             }
         }
 
@@ -309,6 +327,7 @@ namespace SinkLite.Core
                 Socket audio = null;
                 try
                 {
+                    identity = WifiIdentity.Current;
                     control = BindSocket(controlPort, true);
                     audio = BindSocket(audioPort, false);
                     controlSocket = control;
@@ -405,8 +424,8 @@ namespace SinkLite.Core
             playoutThread = null;
         }
 
-        /// <summary>从控制 socket（源端口 45678）广播 OFFER。</summary>
-        public bool SendOffer()
+        /// <summary>从同一控制 socket 发送局域网发现，兼容多网卡和手机热点。</summary>
+        public bool SendOffer(IEnumerable<IPAddress> targets = null)
         {
             Socket socket = controlSocket;
             if (socket == null)
@@ -417,7 +436,12 @@ namespace SinkLite.Core
             try
             {
                 byte[] offer = WifiTransport.BuildOffer(deviceName, audioPort);
-                socket.SendTo(offer, new IPEndPoint(IPAddress.Broadcast, controlPort));
+                byte[] id = System.Text.Encoding.ASCII.GetBytes(identity ??= WifiIdentity.Current);
+                Array.Resize(ref offer, offer.Length + id.Length);
+                Buffer.BlockCopy(id,0,offer,offer.Length-id.Length,id.Length);
+                int sent = WifiDiscoveryTargets.Send(targets ?? WifiDiscoveryTargets.GetCurrent(),
+                    target => socket.SendTo(offer, new IPEndPoint(target, controlPort)));
+                if (sent == 0) throw new SocketException((int)SocketError.NetworkUnreachable);
                 return true;
             }
             catch (Exception ex)
@@ -527,6 +551,20 @@ namespace SinkLite.Core
 
             switch (header.Type)
             {
+                case WifiTransport.TypeIdentityQuery:
+                    if (control)
+                    {
+                        byte[] reply = WifiIdentity.Reply(data,length,identity ??= WifiIdentity.Current,deviceName,audioPort);
+                        if (reply != null) SendControlPacket(reply,from);
+                    }
+                    break;
+                case WifiTransport.TypeIdentityReply:
+                    break;
+                case WifiTransport.TypeDiagnostics:
+                    if (control) HandleDiagnostics(data, length, header, from, now);
+                    break;
+                case WifiTransport.TypeDiagnosticsAck:
+                    break;
                 case WifiTransport.TypeAudio:
                     HandleAudio(data, length, header, from, now);
                     break;
@@ -561,6 +599,49 @@ namespace SinkLite.Core
                     }
                     break;
             }
+        }
+
+        private long lastDiagnosticTicks;
+        private uint lastDiagnosticPong;
+        private static readonly Regex DiagnosticCode = new Regex(@"\A[A-Za-z][A-Za-z0-9.-]{0,47}\z", RegexOptions.CultureInvariant);
+
+        private void HandleDiagnostics(byte[] data, int length, WifiTransport.WifiHeader header, IPEndPoint from, long now)
+        {
+            int payloadLength = length - WifiTransport.HeaderSize;
+            if (payloadLength <= 0 || payloadLength > 1100) return;
+            lock (sync)
+            {
+                if (!AcceptSourceLocked(from) || !IsCurrentEndpointLocked(from) || lastPongTicks == 0 ||
+                    now - lastPongTicks > TicksFromMs(5000) || header.TimestampUs != lastDiagnosticPong ||
+                    (lastDiagnosticTicks != 0 && now - lastDiagnosticTicks < TicksFromMs(1000))) return;
+                lastDiagnosticTicks = now;
+            }
+
+            var entries = new List<(string Id, long Time, string Code, long A, long B, long C)>();
+            try
+            {
+                using var document = JsonDocument.Parse(new ReadOnlyMemory<byte>(data, WifiTransport.HeaderSize, payloadLength));
+                var batch = document.RootElement;
+                if (batch.ValueKind != JsonValueKind.Array || batch.GetArrayLength() is < 1 or > 6) return;
+                foreach (var row in batch.EnumerateArray())
+                {
+                    if (row.ValueKind != JsonValueKind.Array || row.GetArrayLength() != 6 ||
+                        row[0].ValueKind != JsonValueKind.String || row[2].ValueKind != JsonValueKind.String) return;
+                    string id = row[0].GetString(), code = row[2].GetString();
+                    if (id.Length != 32 || !Guid.TryParseExact(id, "N", out _) || !DiagnosticCode.IsMatch(code) ||
+                        row[1].ValueKind != JsonValueKind.Number || !row[1].TryGetInt64(out long time) ||
+                        row[3].ValueKind != JsonValueKind.Number || !row[3].TryGetInt64(out long a) ||
+                        row[4].ValueKind != JsonValueKind.Number || !row[4].TryGetInt64(out long b) ||
+                        row[5].ValueKind != JsonValueKind.Number || !row[5].TryGetInt64(out long c)) return;
+                    entries.Add((id, time, code, a, b, c));
+                }
+            }
+            catch (JsonException) { return; }
+
+            foreach (var entry in entries)
+                if (!log.WriteAndroidEvent(entry.Id, entry.Time, entry.Code, entry.A, entry.B, entry.C, header.TimestampUs)) return;
+
+            SendControlPacket(WifiTransport.BuildPacket(WifiTransport.TypeDiagnosticsAck, 0, header.Seq, header.TimestampUs, null), from);
         }
 
         private void HandleAudio(byte[] data, int length, WifiTransport.WifiHeader header, IPEndPoint from, long now)
@@ -841,9 +922,11 @@ namespace SinkLite.Core
                 clockOffsetUs = unchecked((int)offset);
                 offsetValid = true;
                 lastPongTicks = now;
+                lastDiagnosticPong = echoedUs;
                 rttMs = rttUs / 1000.0;
                 log.Info(
                     "Pong.Recv",
+                    ("pingToken", echoedUs),
                     ("rttMs", Math.Round(rttMs, 1)),
                     ("offsetMs", Math.Round(clockOffsetUs / 1000.0, 1)));
             }
@@ -1354,7 +1437,7 @@ namespace SinkLite.Core
             if (pingTarget != null)
             {
                 SendControlPacket(
-                    WifiTransport.BuildPacket(WifiTransport.TypePing, 0, 0, pingUs, null),
+                    WifiTransport.BuildPacket(WifiTransport.TypePing, WifiTransport.FlagDiagnostics, 0, pingUs, null),
                     pingTarget);
             }
         }
@@ -1433,6 +1516,10 @@ namespace SinkLite.Core
                 ("mmcss", output != null && output.MmcssActive),
                 ("maxReadGapMs", output == null ? 0 : Math.Round(output.MaxReadGapMs, 2)),
                 ("inputFrames", output == null ? 0L : output.InputFrames),
+                ("recentInputSignal", lastSignalTicks != 0 && now - lastSignalTicks < TicksFromMs(1200)),
+                ("outputActive", playing && !rebuffering && output != null && output.IsPlaying),
+                ("outputMode", (output?.Mode ?? AudioOutputMode.None).ToString()),
+                ("softwareVolume", outputOptions.VolumePercent),
                 ("maxInputZeroRunFrames", output == null ? 0L : output.MaxInputZeroRunFrames),
                 ("discontinuities", discontinuities),
                 ("malformed", malformed),

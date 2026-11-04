@@ -13,9 +13,10 @@ namespace SinkLite.UI
         private readonly Win32.WndProcDelegate procedure;
         private readonly Action<int> accepted;
         private readonly Action invalid;
+        private readonly int minimum, maximum;
         public bool Active => window != IntPtr.Zero;
-        public VolumeInput(Action<int> accepted, Action invalid)
-        { this.accepted = accepted; this.invalid = invalid; procedure = WindowProc; }
+        public VolumeInput(Action<int> accepted, Action invalid, int minimum = 0, int maximum = 100)
+        { this.accepted = accepted; this.invalid = invalid; this.minimum = minimum; this.maximum = maximum; procedure = WindowProc; }
 
         [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW")] private static extern IntPtr SetProcedure(IntPtr window, int index, IntPtr value);
         [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern IntPtr CallWindowProc(IntPtr previous, IntPtr window, int msg, IntPtr wp, IntPtr lp);
@@ -33,7 +34,7 @@ namespace SinkLite.UI
             previousProcedure = SetProcedure(window, -4, Marshal.GetFunctionPointerForDelegate(procedure));
             if(previousProcedure == IntPtr.Zero) { Win32.DestroyWindow(window); window = IntPtr.Zero; return false; }
             Win32.SendMessage(window, 0x0030, font, new IntPtr(1)); // WM_SETFONT
-            Win32.SendMessage(window, 0x00C5, new IntPtr(8), IntPtr.Zero); // EM_LIMITTEXT, validate rather than truncate to 100.
+            Win32.SendMessage(window, 0x00C5, new IntPtr(32), IntPtr.Zero); // EM_LIMITTEXT
             SetFocus(window);
             Win32.SendMessage(window, 0x00B1, IntPtr.Zero, new IntPtr(-1));
             return true;
@@ -60,8 +61,8 @@ namespace SinkLite.UI
             int value = 0; bool valid = false;
             if(commit)
             {
-                var text = new StringBuilder(32); GetWindowText(window, text, text.Capacity);
-                valid = int.TryParse(text.ToString().Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out value) && value >= 0 && value <= 100;
+                var text = new StringBuilder(33); GetWindowText(window, text, text.Capacity);
+                valid = int.TryParse(text.ToString().Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out value) && value >= minimum && value <= maximum;
                 if(!valid && keepInvalid) { invalid(); Win32.SendMessage(window, 0x00B1, IntPtr.Zero, new IntPtr(-1)); return; }
             }
             var old = window; window = IntPtr.Zero;

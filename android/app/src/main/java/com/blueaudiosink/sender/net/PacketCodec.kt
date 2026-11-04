@@ -29,6 +29,9 @@ object PacketCodec {
     const val TYPE_VOLUME_GET = 8
     const val TYPE_VOLUME_SET = 9
     const val TYPE_VOLUME_STATE = 10
+    const val TYPE_DIAGNOSTICS = 13
+    const val TYPE_DIAGNOSTICS_ACK = 14
+    const val FLAG_DIAGNOSTICS = 2
 
     // ---- flags ----
     /** 仅手机置位，表示「内容不连续」（补静音/丢帧），与网络丢包无关。 */
@@ -39,6 +42,9 @@ object PacketCodec {
     const val CONTROL_PORT = 45_678
     /** 音频默认目的端口（OFFER 未给出时使用）。 */
     const val DEFAULT_AUDIO_PORT = 45_679
+
+    const val TYPE_IDENTITY_QUERY = 11
+    const val TYPE_IDENTITY_REPLY = 12
 
     // ---- 音频格式（协议第 3 节）----
     const val SAMPLE_RATE = 48_000

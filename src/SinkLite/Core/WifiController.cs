@@ -81,6 +81,7 @@ namespace SinkLite.Core
         public int Port { get; set; }
 
         public string LocalAddress { get; set; }
+        public long NetworkGeneration { get; set; }
 
         public DateTime ChangedAt { get; set; } = DateTime.Now;
     }
@@ -98,10 +99,12 @@ namespace SinkLite.Core
         private int bufferBaseMs;
         private int bufferMaxMs;
         private readonly string deviceName;
-        private readonly string localAddress;
-        private string cachedRoutePeer;
-        private string cachedPeerAddress;
-        private DateTime routeRefreshAt;
+        private string localAddress;
+        private DateTime localAddressRefreshAt;
+        private WifiLanAddress[] lanAddresses;
+        private string lanSignature;
+        private long networkGeneration;
+        private readonly Func<WifiLanAddress[]> networkProvider;
 
         private WifiReceiver receiver;
         private System.Threading.Timer offerTimer;
@@ -110,7 +113,7 @@ namespace SinkLite.Core
         private DateTime lastOfferLog = DateTime.MinValue;
         private DateTime lastOfferErrorLog = DateTime.MinValue;
 
-        public WifiController(Log log, int audioPort, int bufferBaseMs, int bufferMaxMs, WifiOutputOptions outputOptions = null)
+        public WifiController(Log log, int audioPort, int bufferBaseMs, int bufferMaxMs, WifiOutputOptions outputOptions = null, Func<WifiLanAddress[]> networkProvider = null)
         {
             this.log = log;
             this.outputOptions = outputOptions ?? new WifiOutputOptions();
@@ -118,7 +121,10 @@ namespace SinkLite.Core
             this.bufferBaseMs = bufferBaseMs;
             this.bufferMaxMs = bufferMaxMs;
             deviceName = string.IsNullOrWhiteSpace(Environment.MachineName) ? "BlueAudioSink" : Environment.MachineName;
-            localAddress = FindLocalIPv4();
+            this.networkProvider=networkProvider ?? WifiLanAddresses.Read;
+            lanAddresses=this.networkProvider();
+            lanSignature=WifiLanAddresses.Signature(lanAddresses);
+            localAddress=WifiLanAddresses.Choose(lanAddresses);
         }
 
         public bool Enabled
@@ -213,15 +219,35 @@ namespace SinkLite.Core
             lock (sync) { return receiver != null && receiver.SelectPeer(id); }
         }
 
-        public void PrepareReconnect(string endpoint, string name)
+        public void PrepareReconnect(string endpoint, string name, long? generation = null)
         {
-            if(System.Net.IPEndPoint.TryParse(endpoint, out var peer))
-                lock(sync) receiver?.PrepareReconnect(peer, name);
+            if(IPEndPoint.TryParse(endpoint,out var peer)) lock(sync) {
+                RefreshNetworkLocked();
+                if((generation.HasValue && generation.Value!=networkGeneration) || !WifiLanAddresses.OnLink(lanAddresses,peer.Address)) {
+                    log.Info("Wifi.ReconnectHintDiscarded",("reason","network changed"));return;
+                }
+                receiver?.PrepareReconnect(peer,name);
+            }
+        }
+
+        private void RefreshNetworkLocked(bool force = false)
+        {
+            if(!force && DateTime.UtcNow<localAddressRefreshAt) return;
+            localAddressRefreshAt=DateTime.UtcNow.AddSeconds(2);
+            var current=networkProvider();
+            string signature=WifiLanAddresses.Signature(current);
+            if(signature!=lanSignature) {
+                networkGeneration++;
+                receiver?.ResetNetworkPeers();
+                log.Info("Wifi.LanChanged", ("generation", networkGeneration), ("ipv4Candidates", current.Length));
+            }
+            lanAddresses=current;lanSignature=signature;
+            localAddress=WifiLanAddresses.Choose(current);
         }
 
         public bool RefreshDiscovery()
         {
-            lock (sync) { return receiver != null && receiver.SendOffer(); }
+            lock (sync) { RefreshNetworkLocked(true); return receiver != null && receiver.SendOffer(); }
         }
 
         public void Stop()
@@ -267,6 +293,7 @@ namespace SinkLite.Core
             WifiReceiver current;
             lock (sync)
             {
+                RefreshNetworkLocked();
                 if (!enabled)
                 {
                     return;
@@ -302,6 +329,7 @@ namespace SinkLite.Core
                 string error;
                 lock (sync)
                 {
+                    RefreshNetworkLocked();
                     rx = receiver;
                     error = lastError;
                 }
@@ -313,13 +341,9 @@ namespace SinkLite.Core
                     snapshot.Port = audioPort;
                     lock (sync)
                     {
-                        if (snapshot.Remote != cachedRoutePeer || DateTime.Now >= routeRefreshAt)
-                        {
-                            cachedRoutePeer = snapshot.Remote;
-                            cachedPeerAddress = string.IsNullOrEmpty(snapshot.Remote) ? localAddress : FindLocalIPv4(snapshot.Remote);
-                            routeRefreshAt = DateTime.Now.AddSeconds(10);
-                        }
-                        snapshot.LocalAddress = cachedPeerAddress;
+                        bool fresh=(snapshot.ControlAgeMs<=5000 || snapshot.LastAudioAgeMs<=5000);
+                        snapshot.LocalAddress=WifiLanAddresses.Choose(lanAddresses,fresh ? snapshot.Remote : null);
+                        snapshot.NetworkGeneration=networkGeneration;
                     }
                     return snapshot;
                 }
@@ -331,89 +355,9 @@ namespace SinkLite.Core
                 disabled.Detail = string.IsNullOrEmpty(error) ? "Wi-Fi 模式未启用" : error;
                 disabled.Port = audioPort;
                 disabled.LocalAddress = localAddress;
+                disabled.NetworkGeneration = networkGeneration;
                 return disabled;
             }
-        }
-
-        private static string FindLocalIPv4(string peer = null)
-        {
-            // Prefer the actual phone route; otherwise show an active Wi-Fi address
-            // instead of an unrelated VPN/default internet route. No probe is sent.
-            if (string.IsNullOrEmpty(peer))
-            {
-                try
-                {
-                    foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
-                        if (nic.OperationalStatus == OperationalStatus.Up && nic.NetworkInterfaceType == NetworkInterfaceType.Wireless80211)
-                            foreach (UnicastIPAddressInformation address in nic.GetIPProperties().UnicastAddresses)
-                                if (address.Address.AddressFamily == AddressFamily.InterNetwork && !address.Address.ToString().StartsWith("169.254."))
-                                    return address.Address.ToString();
-                }
-                catch { }
-            }
-            // 用 UDP connect 让系统按默认路由选源地址；不会真正发包。
-            try
-            {
-                using (Socket probe = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
-                {
-                    IPEndPoint remote;
-                    probe.Connect(IPEndPoint.TryParse(peer, out remote) ? remote : new IPEndPoint(IPAddress.Parse("8.8.8.8"), 53));
-                    IPEndPoint local = probe.LocalEndPoint as IPEndPoint;
-                    if (local != null && !local.Address.Equals(IPAddress.Any))
-                    {
-                        return local.Address.ToString();
-                    }
-                }
-            }
-            catch
-            {
-            }
-
-            string fallback = null;
-            string linkLocal = null;
-            try
-            {
-                foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
-                {
-                    if (nic.OperationalStatus != OperationalStatus.Up)
-                    {
-                        continue;
-                    }
-
-                    if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
-                    {
-                        continue;
-                    }
-
-                    foreach (UnicastIPAddressInformation address in nic.GetIPProperties().UnicastAddresses)
-                    {
-                        if (address.Address.AddressFamily != AddressFamily.InterNetwork)
-                        {
-                            continue;
-                        }
-
-                        string ip = address.Address.ToString();
-                        if (ip.StartsWith("169.254.", StringComparison.Ordinal))
-                        {
-                            if (linkLocal == null)
-                            {
-                                linkLocal = ip;
-                            }
-                        }
-                        else if (fallback == null)
-                        {
-                            fallback = ip;
-                        }
-                    }
-                }
-            }
-            catch
-            {
-            }
-
-            if (!string.IsNullOrEmpty(fallback)) return fallback;
-            if (!string.IsNullOrEmpty(linkLocal)) return linkLocal;
-            return "127.0.0.1";
         }
 
         public void Dispose()

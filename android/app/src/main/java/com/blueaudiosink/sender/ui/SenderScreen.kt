@@ -1,6 +1,7 @@
 package com.blueaudiosink.sender.ui
 
 import androidx.compose.foundation.background
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +20,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import com.blueaudiosink.sender.core.LinkController
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -31,8 +38,6 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Slider
-import kotlin.math.roundToInt
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -62,13 +67,13 @@ import com.blueaudiosink.sender.R
 import com.blueaudiosink.sender.capture.BufferTier
 import com.blueaudiosink.sender.core.LinkPhase
 import com.blueaudiosink.sender.core.SenderUiState
+import com.blueaudiosink.sender.core.SendDuration
 import com.blueaudiosink.sender.net.PacketCodec
 import java.util.Locale
 
 /**
- * 单页界面（自上而下）：
- * 状态卡（一行）→ 设备列表（已保存在前 + 发现到的）→「+ 手动添加」次要入口 →
- * 缓冲档位（三个胶囊）→ 开始/停止 → 底部两个数值。
+ * 主界面：状态卡 → 设备操作与列表 → 缓冲档位 → 接收音量 → 开始/停止 → 统计。
+ * 齿轮入口提供独立设置和信息页，页面切换不影响连接与采集。
  *
  * 文案原则：只保留标签与数值，不放解释性长句；所有文字来自 res/values/strings.xml。
  */
@@ -86,6 +91,9 @@ fun SenderScreen(
     onDismissMessage: () -> Unit,
     onRefreshDiscovery: () -> Unit,
 ) {
+    var page by rememberSaveable { mutableStateOf("main") }
+    val goBack = { page = if (page == "settings") "main" else "settings" }
+    BackHandler(enabled = page != "main", onBack = goBack)
     val snackbarHostState = remember { SnackbarHostState() }
     val message = state.message
     LaunchedEffect(state.messageToken) {
@@ -105,7 +113,22 @@ fun SenderScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name), fontWeight = FontWeight.SemiBold) },
+                title = { Text(stringResource(when (page) {
+                    "settings" -> R.string.settings_title
+                    "device" -> R.string.local_device_title
+                    "about" -> R.string.about_title
+                    else -> R.string.app_name
+                }), fontWeight = FontWeight.SemiBold) },
+                navigationIcon = {
+                    if (page != "main") IconButton(onClick = goBack) {
+                        Icon(painterResource(R.drawable.ic_back), stringResource(R.string.action_back))
+                    }
+                },
+                actions = {
+                    if (page == "main") IconButton(onClick = { page = "settings" }) {
+                        Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings_title))
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
@@ -115,6 +138,10 @@ fun SenderScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
+        if (page != "main") {
+            SettingsContent(page, Modifier.padding(innerPadding), onSelect = { page = it })
+            return@Scaffold
+        }
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             Column(
                 modifier = Modifier
@@ -141,23 +168,10 @@ fun SenderScreen(
                 TierSection(state.tier, onTierChange)
                 if (state.pcConnected) {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(stringResource(R.string.pc_receive_volume), style = MaterialTheme.typography.titleMedium)
-                                Text(state.remoteVolume?.let { "$it%" } ?: "—", color = MaterialTheme.colorScheme.primary)
-                            }
-                            Slider(
-                                value = (state.remoteVolume ?: 0).toFloat(),
-                                onValueChange = { onRemoteVolumeChange(it.roundToInt()) },
-                                valueRange = 0f..100f,
-                                enabled = state.remoteVolumeReady,
-                                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "电脑接收音量" },
-                            )
-                            if (!state.remoteVolumeReady) Text(
-                                stringResource(if (state.targetIp == null) R.string.pc_volume_disconnected else R.string.pc_volume_waiting),
-                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        ReceiverVolumeControl(
+                            state, onRemoteVolumeChange,
+                            Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                        )
                     }
                 }
                 PrimaryButton(state, onStart, onStop)
@@ -174,12 +188,12 @@ private fun StatusCard(state: SenderUiState) {
         LinkPhase.CONNECTED -> Color(0xFF2E9E5B)
         LinkPhase.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
     }
-    val statusText = when (state.phase) {
+    val statusText = if(state.resolving) "正在查找电脑" else when (state.phase) {
         LinkPhase.STREAMING -> stringResource(R.string.status_streaming)
         LinkPhase.CONNECTED -> stringResource(R.string.status_connected)
         LinkPhase.IDLE -> stringResource(R.string.status_disconnected)
     }
-    val deviceText = state.targetIp?.let { ip ->
+    val deviceText = if(state.resolving) state.targetName else state.targetIp?.let { ip ->
         state.targetName?.takeIf { it.isNotBlank() && it != ip } ?: ip
     }
 
@@ -218,6 +232,8 @@ private fun StatusCard(state: SenderUiState) {
 
 /** 列表项：已保存设备与广播发现到的设备合并后的展示模型。 */
 private data class DeviceItem(
+    val key: String,
+    val legacy: Boolean,
     val ip: String,
     val port: Int,
     val name: String,
@@ -237,27 +253,19 @@ private fun DeviceSection(
     onRemoveSaved: (String) -> Unit,
     onRefreshDiscovery: () -> Unit,
 ) {
-    val items = remember(state.savedDevices, state.devices) { mergeDevices(state) }
+    val items = remember(state.savedDevices, state.devices, state.targetIp, state.pcConnected) { mergeDevices(state) }
+    var oldDevice by remember { mutableStateOf<DeviceItem?>(null) }
+    var mergeOpen by remember { mutableStateOf(false) }
+    oldDevice?.let { old -> AlertDialog(
+        onDismissRequest={oldDevice=null}, title={Text("确认旧地址记录")},
+        text={Text("这条旧记录还没有电脑身份。请确认 ${old.name}（${old.ip}）是要连接的电脑；连接成功后会记住它的固定身份")},
+        confirmButton={TextButton(onClick={onConnect(old.key,old.port);oldDevice=null}){Text("确认连接")}},
+        dismissButton={TextButton(onClick={oldDevice=null}){Text("取消")}},
+    ) }
+    if(mergeOpen) LegacyMergeDialog(state) { mergeOpen=false }
+
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (items.isEmpty()) {
-            Text(
-                text = stringResource(R.string.device_empty),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-        } else {
-            items.forEach { item ->
-                DeviceRow(
-                    item = item,
-                    selected = item.ip == state.targetIp,
-                    onClick = { onConnect(item.ip, item.port) },
-                    onRemove = { onRemoveSaved(item.ip) },
-                )
-            }
-        }
-
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -266,8 +274,10 @@ private fun DeviceSection(
                 Text(stringResource(R.string.action_manual_add))
             }
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = onRefreshDiscovery) {
-                Text(stringResource(R.string.action_refresh))
+            IconButton(onClick = onRefreshDiscovery, modifier = Modifier.size(48.dp)) {
+                Icon(painter = painterResource(R.drawable.ic_refresh),
+                    contentDescription = stringResource(R.string.action_refresh),
+                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
             }
         }
 
@@ -297,38 +307,65 @@ private fun DeviceSection(
                 }
             }
         }
+
+        if (items.isEmpty()) {
+            Text(
+                text = stringResource(R.string.device_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        } else {
+            items.forEach { item ->
+                DeviceRow(
+                    item = item,
+                    selected = if(state.targetDeviceId!=null) item.key=="id:${state.targetDeviceId}" else item.ip==state.targetIp,
+                    onClick = { if(item.legacy) oldDevice=item else onConnect(item.key, item.port) },
+                    onRemove = { onRemoveSaved(item.key) },
+                )
+            }
+        }
+
+        if(state.pcConnected && state.targetDeviceId!=null && state.savedDevices.any { it.deviceId==null }) {
+            TextButton(onClick={mergeOpen=true}) { Text("合并旧地址记录") }
+        }
+
     }
 }
 
 private fun mergeDevices(state: SenderUiState): List<DeviceItem> {
-    val saved = state.savedDevices
-    val savedIps = saved.mapTo(HashSet()) { it.ip }
-    val result = ArrayList<DeviceItem>(saved.size + state.devices.size)
-    saved.forEachIndexed { index, device ->
-        result.add(
-            DeviceItem(
-                ip = device.ip,
-                port = device.port,
-                name = device.name,
-                saved = true,
-                lastUsed = index == 0,
-            ),
-        )
+    val result=ArrayList<DeviceItem>()
+    val keys=HashSet<String>()
+    state.savedDevices.forEachIndexed { index,saved ->
+        val live=state.devices.firstOrNull { saved.deviceId!=null && it.deviceId==saved.deviceId }
+        val active=state.pcConnected && saved.deviceId==state.targetDeviceId
+        val ip=if(active) state.targetIp ?: saved.ip else live?.ip ?: saved.ip
+        result.add(DeviceItem(saved.key,saved.deviceId==null,ip,live?.port ?: saved.port,live?.name ?: saved.name,true,index==0))
+        keys.add(saved.key)
     }
-    state.devices.forEach { device ->
-        if (device.ip !in savedIps) {
-            result.add(
-                DeviceItem(
-                    ip = device.ip,
-                    port = device.port,
-                    name = device.name,
-                    saved = false,
-                    lastUsed = false,
-                ),
-            )
-        }
+    state.devices.forEach { d ->
+        val key=d.deviceId?.let { "id:$it" } ?: "ip:${d.ip}"
+        if(keys.add(key)) result.add(DeviceItem(key,false,d.ip,d.port,d.name,false,false))
     }
     return result
+}
+
+@Composable
+private fun LegacyMergeDialog(state: SenderUiState, close: ()->Unit) {
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    AlertDialog(onDismissRequest=close,title={Text("合并到 ${state.targetName.orEmpty()}")},
+        text={Column {
+            Text("只选择属于当前这台电脑的旧地址，不会根据同名自动合并")
+            state.savedDevices.filter { it.deviceId==null }.forEach { d ->
+                Row(verticalAlignment=Alignment.CenterVertically) {
+                    Checkbox(checked=d.key in selected,onCheckedChange={checked->selected=if(checked) selected+d.key else selected-d.key})
+                    Text("${d.name} · ${d.ip}")
+                }
+            }
+        }},
+        confirmButton={TextButton(enabled=selected.isNotEmpty() && state.pcConnected,onClick={LinkController.mergeLegacy(selected);close()}){Text("确认合并")}},
+        dismissButton={TextButton(onClick=close){Text("取消")}},
+    )
 }
 
 @Composable
@@ -369,37 +406,13 @@ private fun DeviceRow(
                     ),
             )
             Spacer(Modifier.width(12.dp))
-            val address = if (item.port == PacketCodec.DEFAULT_AUDIO_PORT) {
-                item.ip
-            } else {
-                item.ip + ":" + item.port
-            }
-            val named = item.name.isNotBlank() && item.name != item.ip
-            Column(Modifier.weight(1f)) {
-                if (named) {
-                    Text(
-                        text = item.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = address,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                } else {
-                    // 没有电脑名时只显示地址，避免同一行重复两次 IP
-                    Text(
-                        text = address,
-                        style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+            val named = item.name.isNotBlank() && !Regex("[0-9.]+(:[0-9]+)?").matches(item.name)
+            Text(
+                text = if(named) item.name else stringResource(if(item.saved) R.string.device_saved_unnamed else R.string.device_unnamed),
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
             if (item.lastUsed) {
                 Text(
                     text = stringResource(R.string.device_last_used),
@@ -458,12 +471,12 @@ private fun PrimaryButton(state: SenderUiState, onStart: () -> Unit, onStop: () 
     val streaming = state.phase == LinkPhase.STREAMING
     Button(
         onClick = { if (streaming) onStop() else onStart() },
-        enabled = streaming || !state.targetIp.isNullOrBlank(),
+        enabled = streaming || (state.pcConnected && !state.resolving),
         modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
         shape = MaterialTheme.shapes.large,
         colors = ButtonDefaults.buttonColors(
             containerColor = if (streaming) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-            contentColor = Color.White,
+            contentColor = if (streaming) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
             disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
@@ -488,14 +501,8 @@ private fun StatsBar(state: SenderUiState) {
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 StatItem(stringResource(R.string.stats_loss), lossText)
-                StatItem(stringResource(R.string.stats_packets), state.packetsSent.toString())
+                StatItem(stringResource(R.string.stats_duration), SendDuration.format(state.sendingSeconds))
             }
-            Text(
-                text = stringResource(R.string.developer_credit),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 12.dp),
-            )
         }
     }
 }

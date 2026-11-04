@@ -9,6 +9,8 @@ enum class LinkPhase { IDLE, CONNECTED, STREAMING }
 /** 单页 UI 的全部状态（由 [LinkController] 唯一持有）。 */
 data class SenderUiState(
     val phase: LinkPhase = LinkPhase.IDLE,
+    val resolving: Boolean = false,
+    val targetDeviceId: String? = null,
     val targetName: String? = null,
     val targetIp: String? = null,
     val targetPort: Int = 45_679,
@@ -23,6 +25,7 @@ data class SenderUiState(
     val remoteVolume: Int? = null,
     val remoteVolumeReady: Boolean = false,
     val packetsSent: Long = 0,
+    val sendingSeconds: Long = 0,
     val tier: BufferTier = BufferTier.BALANCED,
     val message: String? = null,
     val messageToken: Long = 0,

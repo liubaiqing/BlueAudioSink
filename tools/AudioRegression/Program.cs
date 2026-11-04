@@ -288,6 +288,9 @@ class Program
         VolumeRegression.Run(log,Test);
         HotkeyRegression.Run(log,Test);
         WifiEnableRegression.Run(log,Test);
+        WifiDiscoveryRegression.Run(log,Test);
+        IdentityRegression.Run(log,Test);
+        NetworkRecoveryRegression.Run(log,Test);
         Console.WriteLine($"{passed} tests passed");
     }
     [System.Runtime.InteropServices.DllImport("user32.dll")]

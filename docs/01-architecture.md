@@ -12,6 +12,8 @@ Windows: MainWindow → WifiController → WifiReceiver → PlayoutBuffer → WA
 
 Windows 使用 .NET 8、Win32/GDI 和 NAudio.Wasapi，不引入 Windows Forms/WPF。Android 使用 Kotlin、Compose、AudioPlaybackCapture 和前台服务。
 
+界面框架、控件复用及视觉约束见[双端界面规范](06-ui-style-guide.md)。
+
 - MainWindow 管理导航、偏好操作、模式互斥及窗口生命周期，不负责 PCM 调度。
 - SinkController 管理蓝牙连接/重试；EndpointWatcher、RouteControl 管理端点观测及输出偏好。
 - WifiController 管理监听器启停、设备候选和只读快照。WifiReceiver 负责收发、来源隔离、重排、会话及诊断。

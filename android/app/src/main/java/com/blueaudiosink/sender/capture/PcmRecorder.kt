@@ -1,5 +1,7 @@
 package com.blueaudiosink.sender.capture
 
+import com.blueaudiosink.sender.core.Diagnostics
+
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
@@ -62,6 +64,7 @@ class PcmRecorder(
     private var sourceWaits = 0L
     private var sourceOverflows = 0L
     private var shortReads = 0L
+    private var sampledSilentPackets = 0L
     private var sentPackets = 0L
 
     @Volatile
@@ -339,6 +342,12 @@ class PcmRecorder(
             onPacket(outBuffer, packetBytes, (outTsUs and 0xFFFFFFFFL).toInt(), discontinuity)
 
             sentPackets++
+            if (sentPackets % 20L == 0L && outBuffer.all { it == 0.toByte() }) sampledSilentPackets++
+            if (sentPackets % 2000L == 0L) {
+                Diagnostics.recordAsync("Capture.Stats", sourceWaits, sourceOverflows, shortReads)
+                Diagnostics.recordAsync("Capture.Signal", sampledSilentPackets, 100, sentPackets)
+                sampledSilentPackets = 0
+            }
             if (sentPackets % 1000L == 0L) {
                 val queued = synchronized(lock) { fill }
                 Log.i(TAG, "Capture.Stats packets=$sentPackets ringPackets=$queued " +

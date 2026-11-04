@@ -8,13 +8,14 @@ data class DiscoveredDevice(
     val ip: String,
     val port: Int,
     val lastSeenMs: Long,
+    val deviceId: String? = null,
 )
 
 /**
  * 发现列表维护器（协议第 8 节）。
  *
  * socket 与包解析由 [UdpSender] 统一持有（手机只建一个 45678 socket），
- * 本类只负责按 IP 去重、6 秒过期、把最新列表推给界面。
+ * 本类按设备身份去重，旧包按 IP 区分、6 秒过期、把最新列表推给界面。
  */
 class DiscoveryClient(private val onDevices: (List<DiscoveredDevice>) -> Unit) {
 
@@ -51,7 +52,7 @@ class DiscoveryClient(private val onDevices: (List<DiscoveredDevice>) -> Unit) {
     /** 收到 OFFER 时由 UdpSender 的接收线程调用。 */
     fun offer(device: DiscoveredDevice) {
         val snapshot = synchronized(lock) {
-            seen[device.ip] = device
+            seen[device.deviceId ?: device.ip] = device
             seen.values.sortedBy { it.name }
         }
         onDevices(snapshot)

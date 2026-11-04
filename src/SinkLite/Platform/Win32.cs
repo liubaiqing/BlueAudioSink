@@ -8,6 +8,12 @@ namespace SinkLite.Platform
     /// </summary>
     internal static class Win32
     {
+        public const uint DWMWA_CAPTION_COLOR = 35;
+        public const uint DWMWA_TEXT_COLOR = 36;
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmSetWindowAttribute(IntPtr window, uint attribute, in int value, uint valueSize);
+
         [DllImport("user32.dll")]
         public static extern bool DrawIconEx(IntPtr dc,int x,int y,IntPtr icon,int width,int height,uint step,IntPtr brush,uint flags);
 

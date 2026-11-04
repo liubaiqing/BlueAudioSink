@@ -15,6 +15,8 @@ namespace SinkLite.Platform
         public bool AutoConnect { get; set; } = true;
 
         public bool CloseToTray { get; set; }
+        public int LogRetainDays { get; set; } = Log.DefaultRetainDays;
+        public string LogDirectory { get; set; } = string.Empty;
 
         public HotkeyBinding[] Hotkeys { get; } = new HotkeyBinding[4];
 
@@ -83,6 +85,10 @@ namespace SinkLite.Platform
                     string value = line.Substring(eq + 1).Trim();
                     switch (key)
                     {
+                        case "logretaindays":
+                            if (int.TryParse(value, out int days) && days > 0) settings.LogRetainDays = days;
+                            break;
+                        case "logdirectory": settings.LogDirectory = value; break;
                         case "hotkeydisconnect": settings.Hotkeys[0] = HotkeyBinding.Parse(value); break;
                         case "hotkeyreconnect": settings.Hotkeys[1] = HotkeyBinding.Parse(value); break;
                         case "hotkeyvolumeup": settings.Hotkeys[2] = HotkeyBinding.Parse(value); break;
@@ -160,7 +166,7 @@ namespace SinkLite.Platform
             return settings;
         }
 
-        public void Save()
+        public bool Save()
         {
             try
             {
@@ -172,6 +178,8 @@ namespace SinkLite.Platform
                 sb.AppendLine("deviceid=" + (DeviceId ?? string.Empty));
                 sb.AppendLine("autoconnect=" + (AutoConnect ? "1" : "0"));
                 sb.AppendLine("closetotray=" + (CloseToTray ? "1" : "0"));
+                sb.AppendLine("logretaindays=" + LogRetainDays);
+                sb.AppendLine("logdirectory=" + LogDirectory);
                 sb.AppendLine("wifiexclusive=" + (WifiExclusive ? "1" : "0"));
                 sb.AppendLine("wifivolume=" + Math.Clamp(WifiVolume,0,100));
                 sb.AppendLine("sampleseconds=" + SampleSeconds);
@@ -182,9 +190,11 @@ namespace SinkLite.Platform
                 sb.AppendLine("buffermaxms=" + BufferMaxMs);
                 for(int i=0;i<4;i++) sb.AppendLine(GlobalHotkeys.SettingNames[i]+"="+Hotkeys[i].Encode());
                 File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
+                return true;
             }
             catch
             {
+                return false;
             }
         }
     }
