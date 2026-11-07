@@ -1,18 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.InteropServices;
 using SinkLite.Core;
 using SinkLite.Platform;
 
 namespace SinkLite.Platform
 {
-    /// <summary>
-    /// 默认音频输出端点控制。
-    /// 用途：实测本机有 5 个活动渲染端点 + 3 个虚拟声卡，手机声音很容易落到
-    /// 虚拟声卡或 USB-C 耳机上，表现为"连上了却没声音"。这里提供显式切换能力。
-    /// 使用未公开的 IPolicyConfig（Windows 长期可用），失败时降级为提示。
-    /// </summary>
+    /// <summary>Read-only output inventory; never changes system defaults.</summary>
     internal sealed class RouteControl
     {
         private static readonly string[] VirtualMarkers = new[]
@@ -54,32 +48,6 @@ namespace SinkLite.Platform
             return EndpointRegistry.EnumerateActivePhysicalRenders();
         }
 
-        /// <summary>把默认多媒体/通信输出切换到指定端点。</summary>
-        public bool SetDefaultRender(string deviceId, out string error)
-        {
-            error = null;
-            try
-            {
-                IPolicyConfig config = (IPolicyConfig)new PolicyConfigClient();
-                int hr1 = config.SetDefaultEndpoint(deviceId, 0);
-                int hr2 = config.SetDefaultEndpoint(deviceId, 1);
-                int hr3 = config.SetDefaultEndpoint(deviceId, 2);
-                Marshal.ReleaseComObject(config);
-
-                if (hr1 != 0 && hr2 != 0 && hr3 != 0)
-                {
-                    error = "HRESULT " + hr1;
-                    return false;
-                }
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = ex.Message;
-                return false;
-            }
-        }
-
         public static bool IsVirtualName(string name)
         {
             if (string.IsNullOrEmpty(name))
@@ -98,39 +66,4 @@ namespace SinkLite.Platform
         }
     }
 
-    [ComImport]
-    [Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")]
-    internal class PolicyConfigClient
-    {
-    }
-
-    [ComImport]
-    [Guid("F8679F50-850A-41CF-9C72-430F290290C8")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    internal interface IPolicyConfig
-    {
-        [PreserveSig] int GetMixFormat(string deviceName, IntPtr format);
-
-        [PreserveSig] int GetDeviceFormat(string deviceName, bool isDefault, IntPtr format);
-
-        [PreserveSig] int ResetDeviceFormat(string deviceName);
-
-        [PreserveSig] int SetDeviceFormat(string deviceName, IntPtr endpoint, IntPtr mix);
-
-        [PreserveSig] int GetProcessingPeriod(string deviceName, bool isDefault, IntPtr def, IntPtr min);
-
-        [PreserveSig] int SetProcessingPeriod(string deviceName, IntPtr period);
-
-        [PreserveSig] int GetShareMode(string deviceName, IntPtr mode);
-
-        [PreserveSig] int SetShareMode(string deviceName, IntPtr mode);
-
-        [PreserveSig] int GetPropertyValue(string deviceName, bool fxStore, IntPtr key);
-
-        [PreserveSig] int SetPropertyValue(string deviceName, bool fxStore, IntPtr key);
-
-        [PreserveSig] int SetDefaultEndpoint(
-            [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
-            int role);
-    }
 }

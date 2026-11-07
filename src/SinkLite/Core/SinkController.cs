@@ -52,8 +52,6 @@ namespace SinkLite.Core
         private bool faultReported;
         private bool devicesEnumerated;
         private DateTime lastDeviceScan;
-        private DateTime lastRouteLock = DateTime.MinValue;
-        private int routeLockAttempts;
         private readonly EndpointWatcher renderWatcher = new EndpointWatcher();
 
         private string lastEndpointName;
@@ -90,10 +88,7 @@ namespace SinkLite.Core
             }
         }
 
-        /// <summary>
-        /// 注入路由控制。实测发现 Windows 会在音频出现时自动切换默认输出端点，
-        /// 导致手机声音被送到扬声器而不是用户正在使用的耳机。这里用于把输出锁定到用户指定的端点。
-        /// </summary>
+        /// <summary>Attach read-only output inventory for the Wi-Fi endpoint preference.</summary>
         public void AttachRoute(Platform.RouteControl routeControl)
         {
             route = routeControl;
@@ -102,34 +97,17 @@ namespace SinkLite.Core
 
         public string PreferredRenderId { get; set; }
 
-        public bool LockOutput { get; set; } = true;
-
-        /// <summary>设置首选输出端点：持久化、重置纠正计数并立即切换一次。</summary>
+        /// <summary>Select the app's Wi-Fi endpoint without changing Windows defaults.</summary>
         public bool SetPreferredRender(string endpointId, string endpointName, bool persist = true)
         {
-            PreferredRenderId = endpointId;
-            routeLockAttempts = 0;
-            lastRouteLock = DateTime.MinValue;
-
-            Platform.Settings settings = Platform.Settings.Load();
-            settings.PreferredRenderId = endpointId ?? string.Empty;
-            if(persist) settings.Save();
-
-            if (route == null || string.IsNullOrEmpty(endpointId))
-            {
-                return false;
+            if(route==null || string.IsNullOrEmpty(endpointId) || !route.ListPhysicalRenders().Any(e=>e.Id==endpointId)) return false;
+            if(persist) {
+                var settings=Platform.Settings.Load(); settings.PreferredRenderId=endpointId;
+                if(!settings.Save()) return false;
             }
-
-            bool ok = route.SetDefaultRender(endpointId, out string error);
-            if (ok)
-            {
-                log.Info("Route.PreferredSet", ("endpoint", endpointName));
-            }
-            else
-            {
-                log.Warn("Route.PreferredSetFailed", ("endpoint", endpointName), ("error", error));
-            }
-            return ok;
+            PreferredRenderId=endpointId;
+            log.Info("Wifi.OutputPreferred",("endpoint",endpointName));
+            return true;
         }
 
         /// <summary>按名称片段设置首选输出，返回实际命中的端点名称；未命中返回 null。</summary>
@@ -145,8 +123,7 @@ namespace SinkLite.Core
                 if (!string.IsNullOrEmpty(e.Name) &&
                     e.Name.IndexOf(nameFragment, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    SetPreferredRender(e.Id, e.Name);
-                    return e.Name;
+                    return SetPreferredRender(e.Id, e.Name) ? e.Name : null;
                 }
             }
             return null;
@@ -590,7 +567,6 @@ namespace SinkLite.Core
             }
 
             FlowFinding finding = flow.Sample();
-            EnforceOutputLock(finding);
 
             if (!string.IsNullOrEmpty(finding.RenderEndpointName) &&
                 finding.RenderEndpointName != lastRenderName)
@@ -704,54 +680,6 @@ namespace SinkLite.Core
                 log.Warn("Link.WaitingForPhone",
                     ("armedFor", (DateTime.Now - armedAt.Value).TotalSeconds),
                     ("present", presentButInactive));
-            }
-        }
-
-        /// <summary>
-        /// 把默认输出端点维持在用户首选设备上。
-        /// 触发条件：有音频传输迹象（端点已出现或已有峰值），但当前默认输出偏离首选设备。
-        /// 带冷却与计数上限，避免与系统抖动互相拉扯。
-        /// </summary>
-        private void EnforceOutputLock(FlowFinding finding)
-        {
-            if (!LockOutput || route == null || string.IsNullOrEmpty(PreferredRenderId))
-            {
-                return;
-            }
-
-            // 仅在确实有音频迹象时纠正，避免无意义地改动用户设置。
-            if (!finding.HasBluetoothEndpoint && !finding.AudioFlowing)
-            {
-                return;
-            }
-
-            if (finding.RenderEndpointId == PreferredRenderId)
-            {
-                return;
-            }
-
-            if (DateTime.Now - lastRouteLock < TimeSpan.FromSeconds(5))
-            {
-                return;
-            }
-
-            if (routeLockAttempts >= 12)
-            {
-                return;
-            }
-
-            lastRouteLock = DateTime.Now;
-            routeLockAttempts++;
-
-            if (route.SetDefaultRender(PreferredRenderId, out string error))
-            {
-                log.Info("Route.Locked",
-                    ("to", finding.RenderEndpointName == null ? PreferredRenderId : PreferredRenderId),
-                    ("attempt", routeLockAttempts));
-            }
-            else
-            {
-                log.Warn("Route.LockFailed", ("error", error));
             }
         }
 

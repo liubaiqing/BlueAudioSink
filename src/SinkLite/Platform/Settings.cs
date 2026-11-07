@@ -12,6 +12,13 @@ namespace SinkLite.Platform
     /// </summary>
     internal sealed class Settings
     {
+        public int WindowX { get; set; } = 120;
+        public int WindowY { get; set; } = 80;
+        public int WindowWidth { get; set; }
+        public int WindowHeight { get; set; }
+        public int WindowDpi { get; set; } = 96;
+        public bool WindowMaximized { get; set; }
+
         public string DeviceId { get; set; } = string.Empty;
 
         public bool AutoConnect { get; set; } = true;
@@ -60,12 +67,12 @@ namespace SinkLite.Platform
             }
         }
 
-        public static Settings Load()
+        public static Settings Load(string filePath = null)
         {
             Settings settings = new Settings();
             try
             {
-                string path = FilePath;
+                string path = filePath ?? FilePath;
                 if (!File.Exists(path))
                 {
                     return settings;
@@ -89,6 +96,12 @@ namespace SinkLite.Platform
                     string value = line.Substring(eq + 1).Trim();
                     switch (key)
                     {
+                        case "windowx": if(int.TryParse(value,out int wx)) settings.WindowX=wx; break;
+                        case "windowy": if(int.TryParse(value,out int wy)) settings.WindowY=wy; break;
+                        case "windowwidth": if(int.TryParse(value,out int ww)) settings.WindowWidth=ww; break;
+                        case "windowheight": if(int.TryParse(value,out int wh)) settings.WindowHeight=wh; break;
+                        case "windowdpi": if(int.TryParse(value,out int wd)) settings.WindowDpi=wd; break;
+                        case "windowmaximized": settings.WindowMaximized=value=="1"; break;
                         case "logretaindays":
                             if (int.TryParse(value, out int days) && days > 0) settings.LogRetainDays = days;
                             break;
@@ -174,15 +187,21 @@ namespace SinkLite.Platform
             return settings;
         }
 
-        public bool Save()
+        public bool Save(string filePath = null)
         {
             try
             {
-                string path = FilePath;
+                string path = filePath ?? FilePath;
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
 
                 StringBuilder sb = new StringBuilder();
                 sb.AppendLine("# BlueAudioSink 设置");
+                sb.AppendLine("windowx="+WindowX);
+                sb.AppendLine("windowy="+WindowY);
+                sb.AppendLine("windowwidth="+WindowWidth);
+                sb.AppendLine("windowheight="+WindowHeight);
+                sb.AppendLine("windowdpi="+WindowDpi);
+                sb.AppendLine("windowmaximized="+(WindowMaximized ? "1" : "0"));
                 sb.AppendLine("deviceid=" + (DeviceId ?? string.Empty));
                 sb.AppendLine("autoconnect=" + (AutoConnect ? "1" : "0"));
                 sb.AppendLine("closetotray=" + (CloseToTray ? "1" : "0"));

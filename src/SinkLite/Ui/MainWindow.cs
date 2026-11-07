@@ -229,6 +229,7 @@ namespace SinkLite.UI
             tray = new TrayIcon(hwnd);
             UpdateTray();
             controller.SnapshotChanged += OnSnapshotChanged;
+            RestoreWindowGeometry();
             UiLog("Ui.Created", ("dpi", (int)dpi), ("scale", scale), ("mode", wifiMode ? "wifi" : "bluetooth"));
 
 
@@ -321,8 +322,10 @@ namespace SinkLite.UI
                 return;
             }
 
+            bool restoreMaximized=firstShow && pageSettings.WindowMaximized; firstShow=false;
             hiddenToTray = false;
-            if (Win32.IsIconic(hwnd))
+            if(restoreMaximized) Win32.ShowWindow(hwnd,3);
+            else if (Win32.IsIconic(hwnd))
             {
                 Win32.ShowWindow(hwnd, Win32.SW_RESTORE);
             }
@@ -332,7 +335,7 @@ namespace SinkLite.UI
             }
             // The first ShowWindow call can obey a launcher's SW_HIDE startup flag.
             // A window-only application must explicitly show its UI after that call.
-            Win32.ShowWindow(hwnd, Win32.SW_SHOW);
+            Win32.ShowWindow(hwnd, restoreMaximized ? 3 : Win32.SW_SHOW);
             Win32.SetForegroundWindow(hwnd);
             RefreshOutputCache(true);
             RequestRepaint(true);
@@ -878,7 +881,7 @@ namespace SinkLite.UI
                     },()=>{
                         if(!changed) return;
                         var preferences=pageSettings.Copy(); preferences.PreferredRenderId=pick.Id;
-                        if(wifiMode && preferences.WifiExclusive) preferences.WifiVolume=0;
+                        if(preferences.WifiExclusive) preferences.WifiVolume=0;
                         QueueSave(preferences); ApplyOutputPreferences(); cachedPreferredName=pick.Name;
                     });
                     lastOutputRefresh = DateTime.MinValue;
@@ -1281,7 +1284,14 @@ namespace SinkLite.UI
                 case Win32.WM_ERASEBKGND:
                     return new IntPtr(1);
 
+                case 0x0231: // WM_ENTERSIZEMOVE
+                    sizingWindow=true; return IntPtr.Zero;
+                case 0x0232: // WM_EXITSIZEMOVE
+                    sizingWindow=false; CaptureWindowGeometry(); return IntPtr.Zero;
+                case 0x0003: // WM_MOVE: programmatic moves outside a drag
+                    CaptureWindowGeometry(); break;
                 case Win32.WM_SIZE:
+                    CaptureWindowGeometry();
                     volumeInput?.Cancel();
                     HideHelp();
                     RequestRepaint(true);
@@ -1296,7 +1306,11 @@ namespace SinkLite.UI
                         scale = dpi / 96.0;
                         RecreateFonts();
                     }
-                    RequestRepaint(true);
+                    if(lParam!=IntPtr.Zero) {
+                        var suggested=System.Runtime.InteropServices.Marshal.PtrToStructure<Win32.RECT>(lParam);
+                        SetWindowPos(hwnd,IntPtr.Zero,suggested.Left,suggested.Top,suggested.Right-suggested.Left,suggested.Bottom-suggested.Top,0x14);
+                    }
+                    CaptureWindowGeometry(); RequestRepaint(true);
                     return IntPtr.Zero;
 
                 case Win32.WM_TIMER:
@@ -1362,6 +1376,7 @@ namespace SinkLite.UI
                     return IntPtr.Zero;
 
                 case Win32.WM_CLOSE:
+                    CaptureWindowGeometry();
                     if (pageSettings.CloseToTray)
                     {
                         if (UpdateTray())
@@ -1380,6 +1395,7 @@ namespace SinkLite.UI
                     break;
 
                 case Win32.WM_DESTROY:
+                    CaptureWindowGeometry();
                     hotkeyCapture?.Dispose();
                     hotkeys?.Dispose();
                     volumeInput?.Cancel();
@@ -1614,11 +1630,11 @@ namespace SinkLite.UI
             RoundFill(hdc, card, S(8), brushCard); RoundBorder(hdc, card, S(8), brushBorder);
             Text(hdc, "发送手机", fontSmall, SecondaryColor, Rect(m.Left + S(12), S(162), m.Left + half, S(180)));
             Text(hdc, snapshot.DeviceName ?? "尚未选择", fontHeading, TextColor, Rect(m.Left + S(12), S(184), m.Left + half - S(8), S(208)));
-            Text(hdc, "播放到", fontSmall, SecondaryColor, Rect(m.Left + half + S(8), S(162), right - S(12), S(180)));
-            Text(hdc, cachedPreferredName, fontBody, TextColor, Rect(m.Left + half + S(8), S(184), right - S(12), S(208)));
+            Text(hdc, "系统默认输出", fontSmall, SecondaryColor, Rect(m.Left + half + S(8), S(162), right - S(12), S(180)));
+            Text(hdc, snapshot.RenderEndpoint ?? "由 Windows 管理", fontBody, TextColor, Rect(m.Left + half + S(8), S(184), right - S(12), S(208)));
             DrawButton(hdc, m.ConnectRect, snapshot.State == SinkState.Flowing ? "重新连接" : "连接", AreaConnect, true);
             DrawButton(hdc, m.DisconnectRect, "断开", AreaDisconnect, false);
-            Text(hdc, "更换手机或播放设备，请前往设置。", fontSmall, SecondaryColor, Rect(m.Left, S(292), right, S(316)));
+            Text(hdc, "蓝牙输出由 Windows 管理，可在系统音量合成器中调整。", fontSmall, SecondaryColor, Rect(m.Left, S(292), right, S(316)));
         }
 
         private void DrawDeviceSettings(IntPtr hdc, Metrics m)
@@ -1666,7 +1682,7 @@ namespace SinkLite.UI
 
         private void DrawOutputSection(IntPtr hdc, Metrics m)
         {
-            DrawCaption(hdc, "播放设备", m.Left + S(12), m.OutputLabelTop);
+            DrawCaption(hdc, "Wi-Fi 播放设备", m.Left + S(12), m.OutputLabelTop);
 
             bool hover = IsEnabled(AreaOutput) && hoverArea == AreaOutput;
             bool pressed = IsEnabled(AreaOutput) && pressedArea == AreaOutput;
@@ -1866,7 +1882,7 @@ namespace SinkLite.UI
                 case AreaVolumeDown:
                 case AreaVolumeUp: return "手机和电脑共用同一 Wi-Fi 音量值；软件内部按比例乘以音频采样值，不改动 Windows 系统音量或应用音量合成器设置\n点击数字可输入 0–100 的整数，± 每次调节 5%；共享时仍受系统音量影响，独占时绕过共享混音";
                 case AreaOutputStatus: return OutputStatusText()+"\n设备事件同步；输出缓冲 "+(wifi?.Current.OutputBufferMs ?? 0)+"ms，有效预填 "+(wifi?.Current.EffectivePrefillMs ?? 0)+"ms\n"+(wifi?.Current.OutputFallbackReason ?? "实际输出模式以此处为准，设备不可用时会显示原因");
-                case AreaOutput: return "两种模式共用此播放设备\n" + cachedPreferredName;
+                case AreaOutput: return "仅设置 Wi-Fi 播放设备，不修改 Windows 默认输出。蓝牙输出由 Windows 管理，可在系统音量合成器中调整\n" + cachedPreferredName;
                 case AreaAutoStart: return "登录 Windows 后自动打开 BlueAudioSink";
                 case AreaCloseToTray: return "关闭窗口后保持连接和播放。右键托盘选择“彻底退出”结束程序";
                 case AreaAutoConnect: return "启动或切换模式时，自动启用当前蓝牙/Wi-Fi模式的电脑端连接；手机仍需自行开始发送音频";

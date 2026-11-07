@@ -24,6 +24,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if(args.Contains("--issue-one")) return IssueOneRegression.Run();
         var log = New("SinkLite.Platform.Log",Path.Combine(AppContext.BaseDirectory,"logs"),90);
         var policy = New("SinkLite.Core.Policy");
         var controller = New("SinkLite.Core.SinkController",policy,log);
@@ -38,7 +39,7 @@ internal static class Program
             preferences.GetType().GetProperty("CloseToTray").SetValue(preferences,false);
             var keys = (Array)preferences.GetType().GetProperty("Hotkeys").GetValue(preferences);
             for(int i=0;i<keys.Length;i++) keys.SetValue(Activator.CreateInstance(keys.GetType().GetElementType()),i);
-            Call(window,"Create"); hwnd = (IntPtr)Get(window,"hwnd");
+            Call(window,"Create"); Set(window,"trackPlacement",false); hwnd = (IntPtr)Get(window,"hwnd");
             KillTimer(hwnd,new IntPtr(1));
             SetWindowPos(hwnd,IntPtr.Zero,-12000,-12000,0,0,0x0001|0x0010|0x0004);
             ShowWindow(hwnd,4); // SW_SHOWNOACTIVATE

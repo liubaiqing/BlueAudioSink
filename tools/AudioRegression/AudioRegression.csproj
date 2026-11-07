@@ -21,6 +21,7 @@
     <Compile Include="../../src/SinkLite/Platform/Win32.cs" Link="Win32.cs" />
     <Compile Include="../../src/SinkLite/Core/Models.cs" Link="Models.cs" />
     <Compile Include="../../src/SinkLite/Platform/GlobalHotkeys.cs" Link="GlobalHotkeys.cs" />
+    <Compile Include="../../src/SinkLite/Platform/WindowGeometry.cs" Link="WindowGeometry.cs" />
     <Compile Include="../../src/SinkLite/Platform/Settings.cs" Link="Settings.cs" />
     <Compile Include="../../src/SinkLite/Platform/SettingsWriter.cs" Link="SettingsWriter.cs" />
     <Compile Include="../../src/SinkLite/Platform/Log.cs" Link="Log.cs" />

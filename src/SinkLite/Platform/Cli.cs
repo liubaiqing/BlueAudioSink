@@ -100,7 +100,7 @@ namespace SinkLite.Platform
                 "  --connect      连接后进入监听并输出状态变化（Ctrl+C 退出）",
                 "  --wifi         以 Wi-Fi 模式启动（监听 UDP 45679，广播 45678）",
                 "  --diagnose [秒] 诊断模式：采样并输出三层归因（默认 30 秒）",
-                "  --lock-output 名称片段   把声音输出锁定到匹配的设备（会自动记住）",
+                "  --lock-output 名称片段   选择 Wi-Fi 播放设备（会记住，不改系统默认输出）",
                 "  --console      不启动托盘，仅控制台运行",
                 "  --help         显示本帮助",
                 "",

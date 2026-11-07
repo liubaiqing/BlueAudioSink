@@ -16,7 +16,7 @@ Developed by **liubaiqing**. The apps currently use a Chinese interface; the gui
 | :---: | :---: |
 | <img src="docs/images/windows-wifi-enable.png" width="480" alt="Windows receiver: Enable and Disconnect controls" /> | <img src="docs/images/android-wifi.png" width="235" alt="Android sender: sending audio, with developer credit at the bottom" /> |
 
-**Bluetooth** needs no Android sender. **Wi-Fi** uses the companion Android app. Both share the PC's playback and device settings.
+**Bluetooth** needs no Android sender. **Wi-Fi** uses the companion Android app. Wi-Fi output is selected in app Settings. Bluetooth output is managed by Windows.
 
 ## Download and open
 
@@ -56,7 +56,7 @@ Tap the PC → tap **开始发送** (Start sending) → approve Android's record
 
 The phone should show **发送中** (Sending). On the PC, **正在播放手机音频** means audio is being sent to the playback device; **已连接，当前静音** means connected but the incoming audio is silent. Play audio before judging the connection.
 
-Open **设置 → 常规** (Settings → General) in the left sidebar to select your headphones or speakers. Hover over controls for explanations; keyboard users can press F1 after focusing a control.
+Open **设置 → 常规** (Settings → General) in the left sidebar to select the Wi-Fi headphones or speakers without changing the Windows default output. Bluetooth routing can be adjusted in the Windows volume mixer. Hover over controls for explanations; keyboard users can press F1 after focusing a control.
 
 The PC remembers the last Bluetooth or Wi-Fi mode automatically. **Settings → General → 自动连接** applies to both: enabling it starts the selected PC connection on launch or mode switch; disabling it restores the page for manual connection. Phone capture still requires consent and Start sending. **Settings → 关于** shows the version, author, project and MIT license links.
 
@@ -83,7 +83,7 @@ Click the PC Wi-Fi volume percentage to enter an integer from 0 to 100. Once con
 ## Bluetooth: pair → select → connect
 
 1. Pair your phone in **Windows system Bluetooth settings**.
-2. In BlueAudioSink, open **设置 → 连接设备 → 蓝牙手机** and select the phone. Choose the PC output in **常规**.
+2. In BlueAudioSink, open **设置 → 连接设备 → 蓝牙手机** and select the phone. Bluetooth output is managed by the Windows volume mixer.
 3. Select **蓝牙 → 连接**. Play audio on the phone; choose the PC as its Bluetooth media output if needed.
 
 ![Bluetooth mode and Connect button](docs/images/bluetooth-en.png)
