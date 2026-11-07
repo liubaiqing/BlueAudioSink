@@ -35,10 +35,10 @@ internal object RoutePlanner {
         return left and mask == right and mask
     }
 
-    fun candidates(locals: List<LocalRoute>, addresses: List<String>, lastSuccess: String?, explicit: String?): List<PlannedRoute> =
+    fun candidates(locals: List<LocalRoute>, addresses: List<String>, lastSuccess: String?, explicit: String?, port: Int = 45678): List<PlannedRoute> =
         locals.flatMap { local ->
             addresses.distinct().filter { ipv4(it) != null && it != local.address }
-                .map { PlannedRoute(local, it) }
+                .map { PlannedRoute(local, it, port) }
         }.distinctBy { it.key }.sortedWith(
             compareByDescending<PlannedRoute> { it.key == lastSuccess }
                 .thenByDescending { sameSubnet(it.local, it.remote) }

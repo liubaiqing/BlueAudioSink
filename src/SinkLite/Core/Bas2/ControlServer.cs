@@ -33,16 +33,18 @@ namespace SinkLite.Core.Bas2
         private readonly string identity, name;
         private Peer active;
         private bool started;
+        private readonly bool answerUdpProbes;
         public int ControlPort => ((IPEndPoint)controlListener.LocalEndpoint).Port;
         public int MediaPort => ((IPEndPoint)mediaListener.LocalEndpoint).Port;
         public event Action<MediaFrame> AudioReceived;
 
-        public ControlServer(IPAddress listenAddress, int controlPort, int mediaPort, string identity, string name)
+        public ControlServer(IPAddress listenAddress, int controlPort, int mediaPort, string identity, string name, bool answerUdpProbes = true)
         {
             controlListener = new TcpListener(listenAddress, controlPort);
             mediaListener = new TcpListener(listenAddress, mediaPort);
             this.identity = identity;
             this.name = name;
+            this.answerUdpProbes = answerUdpProbes;
         }
 
         public void Start()
@@ -167,7 +169,7 @@ namespace SinkLite.Core.Bas2
                         string id = Convert.ToHexString(frame.SessionId).ToLowerInvariant();
                         if (!peers.TryGetValue(id, out var peer) || !peer.Local.Equals(local) ||
                             !peer.Remote.Equals(((IPEndPoint)received.RemoteEndPoint).Address)) continue;
-                        if (peer.Session.ObserveProbe(frame))
+                        if (answerUdpProbes && peer.Session.ObserveProbe(frame))
                         {
                             peer.MediaEndpoint = (IPEndPoint)received.RemoteEndPoint;
                             reply = WireCodec.EncodeMedia(frame with { Type = 3 });

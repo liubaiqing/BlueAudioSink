@@ -37,6 +37,7 @@ internal class SessionCoordinator(
     private val changed: (ConnectionSnapshot) -> Unit,
     private val diagnostic: (String, Map<String, String>) -> Unit = { _, _ -> },
     private val retryJitter: () -> Long = { (Math.random() * 251).toLong() },
+    private val controlPort: Int = 45678,
 ) : Closeable {
     private val owner = Executors.newSingleThreadScheduledExecutor { runnable -> Thread(runnable, "bas2-session").apply { isDaemon = true } }
     private val rounds = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "bas2-connection-round").apply { isDaemon = true } }
@@ -156,7 +157,7 @@ internal class SessionCoordinator(
         val id = UUID.randomUUID().toString().replace("-", "")
         val intent = targetIntent.get()
         attempt = id
-        val candidates = RoutePlanner.candidates(locals, addresses, lastSuccessfulPath, addresses.firstOrNull())
+        val candidates = RoutePlanner.candidates(locals, addresses, lastSuccessfulPath, addresses.firstOrNull(), controlPort)
         if (candidates.isEmpty()) {
             publish(ConnectionPhase.FINDING, "No LAN route or known address")
             scheduleRetry()
@@ -216,6 +217,7 @@ internal class SessionCoordinator(
 
     private fun recover(error: Exception, immediate: Boolean = false) {
         release()
+        if (closed.get()) return
         publish(ConnectionPhase.RECOVERING, "${error.javaClass.simpleName}: ${error.message}")
         if (immediate) begin() else scheduleRetry()
     }
@@ -241,6 +243,7 @@ internal class SessionCoordinator(
     }
 
     private fun publish(phase: ConnectionPhase, error: String? = null) {
+        if (closed.get()) return
         val current = active
         snapshot = ConnectionSnapshot(phase, attempt, current?.route, current?.connection?.deviceId,
             current?.connection?.deviceName, current?.connection?.sessionId, current?.connection?.usingTcp ?: false, error)

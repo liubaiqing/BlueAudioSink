@@ -1,0 +1,17 @@
+// Run from repository root with -p android -I ../tools/ConnectionRegression/android-probe/probe.init.gradle.
+// A separate applicationId and build directory protect the installed product and release APK.
+gradle.beforeProject { project ->
+    if (project.path == ':app') {
+        def root = project.rootProject.projectDir.parentFile
+        def probe = new File(root, 'tools/ConnectionRegression/android-probe')
+        project.layout.buildDirectory.set(new File(root, 'artifacts/bas2/android-probe-build'))
+        project.plugins.withId('com.android.application') {
+            project.androidComponents.finalizeDsl { android ->
+                android.defaultConfig.applicationId = 'com.blueaudiosink.bas2probe'
+                android.defaultConfig.versionName = 'bas2-connection-probe'
+                android.sourceSets.main.java.srcDir(probe)
+                android.sourceSets.main.manifest.srcFile(new File(probe, 'AndroidManifest.xml'))
+            }
+        }
+    }
+}

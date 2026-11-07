@@ -1,6 +1,8 @@
 using System.Text;
 using SinkLite.Core.Bas2;
 
+if (args.Length > 0 && args[0] == "--device-host") { await DeviceProbe.Run(args); return; }
+
 static void Check(bool value) { if (!value) throw new Exception("Assertion failed"); }
 static void Reject(Action action) {
     try { action(); } catch (InvalidDataException) { return; }

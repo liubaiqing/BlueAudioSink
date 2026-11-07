@@ -4,6 +4,8 @@ BAS2 重构目标与验收约束见 [连接层设计](07-bas2-connection-design.
 
 本文是可重复的验收方法，不是历史运行记录。结果、日志、录音和截图保存在本地忽略的 artifacts 或 CI 产物中，注明测试版本、设备及条件。
 
+BAS2 独立连接回归及隔离实机探针的执行方法见 [ConnectionRegression](../tools/ConnectionRegression/README.md)。探针使用真实物理 LAN，分别验证 UDP 和禁止 UDP 探测后的 TCP 备用传输，不占用产品端口，不打开声卡；它不能替代双端完整应用与一小时稳定性验收。
+
 ## 自动检查
 
 ```powershell
