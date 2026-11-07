@@ -36,11 +36,19 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
     @Volatile private var closed = false
     @Volatile private var sending = false
     @Volatile private var mediaFailure: java.io.IOException? = null
+    @Volatile private var firstSentNs = 0L
+    @Volatile private var lastSentNs = 0L
+    private var heartbeatRtt = -1.0
+    var receiptSent = 0L; private set
+    var receiptReceived = 0L; private set
     var sessionId: String = ""; private set
     var deviceId: String = ""; private set
     var deviceName: String = ""; private set
     var audioPort: Int = 0; private set
     var usingTcp: Boolean = false; private set
+    var attemptId = ""
+    var pathId = ""
+    val streamEpoch: String get() = java.lang.Long.toUnsignedString(epoch,16)
     val localAddress: InetAddress get() = socket.localAddress
 
     fun connect(expectedDeviceId: String?, instanceId: String, name: String, identityPhase: () -> Unit = {}) {
@@ -51,7 +59,7 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
             socket.connect(InetSocketAddress(route.remoteAddress, route.controlPort), 2000)
             identityPhase()
             val welcome = request("hello", JSONObject().put("protocol", 2).put("expectedDeviceId", expectedDeviceId.orEmpty())
-                .put("instanceId", instanceId).put("name", name), "welcome")
+                .put("instanceId", instanceId).put("appRunId", instanceId).put("attemptId",attemptId).put("pathId",pathId).put("name", name), "welcome")
             val body = welcome.getJSONObject("body")
             require(body.getInt("protocol") == 2)
             deviceId = body.getString("deviceId")
@@ -62,7 +70,7 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
         } catch (error: Exception) { close(); throw error }
     }
 
-    fun verifyTransport(): Boolean {
+    fun verifyTransport(forceTcp: Boolean = false): Boolean {
         check(!closed && sessionBytes.size == 16)
         val challenge = SecureRandom().generateSeed(16)
         val candidate = DatagramSocket(null)
@@ -78,7 +86,7 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
             candidate.soTimeout = 500
             val probe = WireCodec.encodeMedia(MediaFrame(2, 0, sessionBytes, 0, 0, 0, challenge))
             val deadline = System.nanoTime() + 1_500_000_000L
-            while (System.nanoTime() < deadline) {
+            while (!forceTcp && System.nanoTime() < deadline) {
                 candidate.send(DatagramPacket(probe, probe.size))
                 val response = DatagramPacket(ByteArray(1201), 1201)
                 try {
@@ -133,6 +141,7 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
         val nextEpoch = java.lang.Long.parseUnsignedLong(response.getJSONObject("body").getString("streamEpoch"), 16)
         require(nextEpoch != 0L)
         synchronized(mediaLock) { epoch = nextEpoch; sequence = 0; sending = true }
+        firstSentNs = 0; lastSentNs = 0
     }
 
     fun stop() {
@@ -143,13 +152,34 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
 
     fun heartbeat() {
         mediaFailure?.let { throw it }
-        request("heartbeat", JSONObject(), "heartbeatAck")
+        socket.soTimeout = 4000
+        val body = JSONObject(); if (heartbeatRtt >= 0) body.put("rttMs",heartbeatRtt)
+        val sent = System.nanoTime()
+        receiptSent = sequence.toLong() and 0xffffffffL
+        val reply = try { request("heartbeat", body, "heartbeatAck").getJSONObject("body") } finally { socket.soTimeout = 2000 }
+        heartbeatRtt = (System.nanoTime()-sent)/1_000_000.0
+        receiptReceived = reply.optLong("audioPackets",0)
+        val now = System.nanoTime()
+        if (!usingTcp && sending && firstSentNs != 0L && now-firstSentNs > 1_000_000_000 && now-lastSentNs < 1_000_000_000 &&
+            (reply.optLong("audioAgeMs",-1) < 0 || reply.optLong("audioAgeMs") > 1000)) {
+            val deadline = now + 2_000_000_000
+            val challenge = SecureRandom().generateSeed(16)
+            val probe = WireCodec.encodeMedia(MediaFrame(2,0,sessionBytes,0,0,0,challenge))
+            while (System.nanoTime() < deadline) {
+                runCatching { udp?.send(DatagramPacket(probe,probe.size)) }
+                Thread.sleep(200)
+                val state = request("heartbeat",JSONObject(),"heartbeatAck").getJSONObject("body")
+                if (state.optLong("audioAgeMs",-1) in 0..999) return
+            }
+            throw UdpUnavailable()
+        }
     }
 
     fun sendAudio(payload: ByteArray, timestampUs: Int, discontinuity: Boolean) {
         synchronized(mediaLock) {
             mediaFailure?.let { throw it }
             if (!sending || closed) return
+            val now = System.nanoTime(); if (firstSentNs == 0L) firstSentNs = now; lastSentNs = now
             val packet = WireCodec.encodeMedia(MediaFrame(1, if (discontinuity) 1 else 0,
                 sessionBytes, epoch, sequence++, timestampUs, payload))
             if (usingTcp) mediaWriter?.offer(packet)
@@ -176,6 +206,7 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
         require(response.getString("type") == expectedReply)
         return response
     }
+    fun application(type: String, body: JSONObject, expected: String): JSONObject = request(type, body, expected).getJSONObject("body")
 
     override fun close() {
         synchronized(resourceLock) {

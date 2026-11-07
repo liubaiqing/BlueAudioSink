@@ -1758,7 +1758,7 @@ namespace SinkLite.UI
             else if (firewallTask == null && firewallStatus.RuleExists)
             {
                 if (firewallStatus.InboundBlocked || firewallStatus.ModifyState != 0) hint = "系统策略限制入站连接，请联系管理员";
-                else if (!firewallStatus.PrivateActive) hint = "当前不是专用网络，规则暂不生效";
+                else if (!firewallStatus.PrivateActive) hint = "当前网络不适用此规则";
             }
             if (!string.IsNullOrEmpty(hint)) DrawWrappedText(hdc, hint, fontSmall, WarningColor, Rect(m.Left, S(270), right, S(318)));
             if (!string.IsNullOrEmpty(firewallMessage)) DrawWrappedText(hdc, firewallMessage, fontBody, AccentTextColor, Rect(m.Left, S(328), right, S(390)));
@@ -1850,7 +1850,7 @@ namespace SinkLite.UI
                 case AreaDeviceWifi: return "查看 Wi-Fi 手机列表，保留当前连接";
                 case AreaRefresh: return browsingWifiDevices ? "广播发现局域网手机；请在手机发送端选择这台电脑" : "重新读取 Windows 已配对的蓝牙手机";
                 case AreaFirewallHelp:
-                case AreaFirewallEnable: return "Wi-Fi 正常收音无需开启；无法收音时再尝试。仅为当前程序放行专用网络、同一子网的 UDP 端口，不关闭防火墙";
+                case AreaFirewallEnable: return "Wi-Fi 正常收音无需开启；无法收音时再尝试。仅为当前程序放行专用和公用网络、同一子网的 TCP/UDP 端口，不关闭防火墙";
                 case AreaFirewallDisable: return "仅移除本程序创建的放行规则，不影响其他规则";
                 case AreaFirewallCheck: return "重新读取防火墙状态，不修改规则";
             }

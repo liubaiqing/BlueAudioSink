@@ -6,6 +6,8 @@
 
 **Latest stable release: Windows 0.2.16 / Android 0.2.16.** Update both apps for remote receiver volume control. Wi-Fi uses Android’s standard audio-capture consent; no Shizuku, root, developer options or ADB is required
 
+**Current source / local build: 0.3.0 (BAS2).** Update both apps together. TCP control verifies the PC identity and media path; UDP audio automatically falls back to TCP compatibility transport. Address changes are resolved by PC identity, and Android diagnostics join the PC log. This build has not been uploaded; the published links below still point to 0.2.16 and must not be mixed with BAS2.
+
 Developed by **liubaiqing**. The apps currently use a Chinese interface; the guides below show which controls to use. The device screenshots are from real devices; settings layout previews are rendered by the application drawing code with example devices. Device names, local addresses, and phone status information are masked.
 
 ## A look at both apps
@@ -60,7 +62,7 @@ The PC remembers the last Bluetooth or Wi-Fi mode automatically. **Settings → 
 
 ![Shared settings: playback device and buffering](docs/images/windows-settings-sidebar.png)
 
-On the PC Wi-Fi page, **启用** starts discovery and reception; **断开** stops discovery, both UDP sockets and audio playback. Reconnecting only restores the PC connection: if the phone is no longer sending, tap **开始发送** on the phone
+On the PC Wi-Fi page, **启用** starts discovery and reception; **断开** stops discovery, all TCP/UDP channels and audio playback. Reconnecting only restores the PC connection: if the phone is no longer sending, tap **开始发送** on the phone
 
 ## Global shortcuts
 
@@ -130,7 +132,7 @@ If audio works, **skip this**. Otherwise open **设置 → 网络** (Settings �
 
 Moving the EXE requires configuring the rule again. Public networks, organization policies, third-party firewalls, or router isolation can still block reception.
 
-Wi-Fi audio uses unencrypted UDP; use a trusted network. Closing the PC window exits by default; enabling Close to tray keeps it running. Opening Settings keeps audio running. Mixing multiple phones simultaneously is not supported.
+Wi-Fi uses unencrypted local TCP/UDP; use a trusted network. Closing the PC window exits by default; enabling Close to tray keeps it running. Opening Settings keeps audio running. Mixing multiple phones simultaneously is not supported.
 
 ## Build from source
 

@@ -188,7 +188,7 @@ private fun StatusCard(state: SenderUiState) {
         LinkPhase.CONNECTED -> Color(0xFF2E9E5B)
         LinkPhase.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
     }
-    val statusText = if(state.resolving) "正在查找电脑" else when (state.phase) {
+    val statusText = state.connectionStage ?: if(state.resolving) "正在查找电脑" else when (state.phase) {
         LinkPhase.STREAMING -> stringResource(R.string.status_streaming)
         LinkPhase.CONNECTED -> stringResource(R.string.status_connected)
         LinkPhase.IDLE -> stringResource(R.string.status_disconnected)
@@ -210,7 +210,7 @@ private fun StatusCard(state: SenderUiState) {
             Box(Modifier.size(12.dp).background(dotColor, CircleShape))
             Spacer(Modifier.width(10.dp))
             Text(
-                text = statusText,
+                text = statusText + if(state.compatibleTransport) " · 兼容" else "",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )

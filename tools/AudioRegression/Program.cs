@@ -293,6 +293,7 @@ class Program
         IdentityRegression.Run(log,Test);
         NetworkRecoveryRegression.Run(log,Test);
         Bas2PlaybackRegression.Run(log,Test);
+        Bas2ProductionRegression.Run(log,Test);
         Console.WriteLine($"{passed} tests passed");
     }
     [System.Runtime.InteropServices.DllImport("user32.dll")]

@@ -12,7 +12,8 @@ using System.Text.Json.Nodes;
 namespace SinkLite.Core.Bas2
 {
     internal sealed record ReceiverPeerSnapshot(string SessionId, string InstanceId, string PhoneName,
-        IPAddress LocalAddress, IPAddress RemoteAddress, ConnectionPhase Phase, ulong StreamEpoch, bool UsingTcp, long LastHeartbeatMs);
+        IPAddress LocalAddress, IPAddress RemoteAddress, ConnectionPhase Phase, ulong StreamEpoch, bool UsingTcp, long LastHeartbeatMs,
+        string AppRunId = null, string AttemptId = null, string PathId = null, string Error = null, double RttMs = double.NaN);
 
     // All session decisions are serialized by gate. Socket reads never own application state.
     internal sealed class ControlServer : IAsyncDisposable
@@ -36,15 +37,33 @@ namespace SinkLite.Core.Bas2
         private readonly string identity, name;
         private Peer active;
         private bool started;
+        private string selectedInstance;
         private readonly bool answerUdpProbes;
         public int ControlPort => ((IPEndPoint)controlListener.LocalEndpoint).Port;
         public int MediaPort => ((IPEndPoint)mediaListener.LocalEndpoint).Port;
         public event Action<MediaFrame> AudioReceived;
         // Handlers only enqueue work; no disk access or playback device operations under the session gate.
         public event Action<ReceiverPeerSnapshot> PeerChanged;
+        public Func<ReceiverPeerSnapshot, ControlMessage, Task<ApplicationReply>> ApplicationHandler { get; set; }
+        public void SelectPeer(string instanceId)
+        {
+            lock (gate) { selectedInstance = instanceId; if (active != null && active.Session.InstanceId != instanceId) active.Client.Dispose(); }
+        }
+        private void Deliver(Peer peer, MediaFrame frame)
+        { peer.Session.NoteAudio(Environment.TickCount64); AudioReceived?.Invoke(frame); }
 
         private ReceiverPeerSnapshot Snapshot(Peer peer) => new(peer.Session.IdText, peer.Session.InstanceId, peer.Session.PhoneName,
-            peer.Local, peer.Remote, peer.Session.Phase, peer.Session.StreamEpoch, peer.Session.UsingTcp, peer.Session.LastHeartbeatMs);
+            peer.Local, peer.Remote, peer.Session.Phase, peer.Session.StreamEpoch, peer.Session.UsingTcp, peer.Session.LastHeartbeatMs,
+            peer.Session.AppRunId,peer.Session.AttemptId,peer.Session.PathId,null,peer.Session.RttMs);
+        private void Failure(Peer peer, TcpClient client, Exception error)
+        {
+            if (cancellation.IsCancellationRequested) return;
+            lock (gate) {
+                var context = peer != null ? Snapshot(peer) : new ReceiverPeerSnapshot("",null,null,
+                    (client.Client.LocalEndPoint as IPEndPoint)?.Address,(client.Client.RemoteEndPoint as IPEndPoint)?.Address,ConnectionPhase.Closed,0,false,Environment.TickCount64);
+                PeerChanged?.Invoke(context with { Error = error.GetType().Name + "/" + error.HResult + ": " + error.Message });
+            }
+        }
 
         public ReceiverPeerSnapshot[] GetPeers()
         {
@@ -107,7 +126,10 @@ namespace SinkLite.Core.Bas2
         {
             if (mediaSockets.TryGetValue(address, out var socket)) return socket;
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            try { socket.Bind(new IPEndPoint(address, MediaPort)); }
+            try {
+                if (OperatingSystem.IsWindows()) socket.IOControl(unchecked((int)0x9800000C), new byte[] { 0, 0, 0, 0 }, null);
+                socket.Bind(new IPEndPoint(address, MediaPort));
+            }
             catch { socket.Dispose(); throw; }
             mediaSockets.Add(address, socket);
             Track(ReceiveMedia(socket, address));
@@ -127,19 +149,35 @@ namespace SinkLite.Core.Bas2
                 {
                     if (peers.Count >= 16 || hello.Type != "hello") throw new InvalidDataException("Invalid BAS2 hello");
                     var local = ((IPEndPoint)client.Client.LocalEndPoint).Address;
-                    GetMediaSocket(local);
                     var session = new ReceiverSession(identity, name, MediaPort, Environment.TickCount64,
                         () => BitConverter.ToUInt64(RandomNumberGenerator.GetBytes(8)) | 1);
                     peer = new Peer { Session = session, Client = client, Local = local, Remote = ((IPEndPoint)client.Client.RemoteEndPoint).Address };
                     peers.Add(session.IdText, peer);
+                    try { GetMediaSocket(local); }
+                    catch (SocketException error) { PeerChanged?.Invoke(Snapshot(peer) with { Error = "UDP bind unavailable: " + error.NativeErrorCode + ": " + error.Message }); }
                 }
                 var request = hello;
                 while (!cancellation.IsCancellationRequested)
                 {
                     byte[] reply;
+                    ApplicationReply application = null;
+                    byte[] cached = null;
+                    if (request.Type is "volumeGet" or "volumeSet" or "diagnostics")
+                    {
+                        ReceiverPeerSnapshot context;
+                        lock (gate) {
+                            cached = peer.Session.ValidateApplication(request);
+                            context = Snapshot(peer);
+                            if (request.Type == "volumeSet" && active != null && active != peer)
+                                application = new ApplicationReply("error", new JsonObject { ["code"] = "Busy" });
+                        }
+                        if (cached == null && application == null && ApplicationHandler != null)
+                            application = await ApplicationHandler(context, request).ConfigureAwait(false);
+                    }
                     lock (gate)
                     {
-                        reply = peer.Session.Handle(request, Environment.TickCount64, active == null || active == peer);
+                        reply = cached ?? peer.Session.Handle(request, Environment.TickCount64,
+                            (active == null || active == peer) && (selectedInstance == null || peer.Session.InstanceId == selectedInstance), application);
                         if (peer.Session.Phase == ConnectionPhase.Streaming) active = peer;
                         else if (active == peer) active = null;
                         PeerChanged?.Invoke(Snapshot(peer));
@@ -149,7 +187,7 @@ namespace SinkLite.Core.Bas2
                 }
             }
             catch (Exception error) when (error is IOException || error is SocketException || error is OperationCanceledException ||
-                error is System.Text.Json.JsonException || error is InvalidOperationException || error is ObjectDisposedException) { }
+                error is System.Text.Json.JsonException || error is InvalidOperationException || error is ObjectDisposedException) { Failure(peer,client,error); }
             finally
             {
                 lock (gate)
@@ -157,10 +195,12 @@ namespace SinkLite.Core.Bas2
                     if (peer != null)
                     {
                         peers.Remove(peer.Session.IdText);
+                        if (selectedInstance == peer.Session.InstanceId && !peers.Values.Any(item => item.Session.InstanceId == selectedInstance)) selectedInstance = null;
                         peer.Session.Close();
                         PeerChanged?.Invoke(Snapshot(peer));
                         peer.MediaClient?.Dispose();
                         if (active == peer) active = null;
+                        if (!peers.Values.Any(item => item.Local.Equals(peer.Local)) && mediaSockets.Remove(peer.Local, out var unused)) unused.Dispose();
                     }
                 }
                 client.Dispose();
@@ -190,7 +230,7 @@ namespace SinkLite.Core.Bas2
                             reply = WireCodec.EncodeMedia(frame with { Type = 3 });
                         }
                         else if (peer == active && !peer.Session.UsingTcp && received.RemoteEndPoint.Equals(peer.MediaEndpoint) &&
-                            peer.Session.AcceptAudio(frame)) AudioReceived?.Invoke(frame);
+                            peer.Session.AcceptAudio(frame)) Deliver(peer, frame);
                     }
                     if (reply != null) await socket.SendToAsync(reply, SocketFlags.None, received.RemoteEndPoint, cancellation.Token);
                 }
@@ -231,12 +271,12 @@ namespace SinkLite.Core.Bas2
                     lock (gate)
                     {
                         if (peer == active && peer.MediaClient == client && peer.Session.AcceptAudio(frame))
-                            AudioReceived?.Invoke(frame);
+                            Deliver(peer, frame);
                     }
                 }
             }
             catch (Exception error) when (error is IOException || error is SocketException || error is OperationCanceledException ||
-                error is System.Text.Json.JsonException || error is InvalidOperationException || error is ObjectDisposedException) { }
+                error is System.Text.Json.JsonException || error is InvalidOperationException || error is ObjectDisposedException) { Failure(peer,client,error); }
             finally
             {
                 lock (gate)

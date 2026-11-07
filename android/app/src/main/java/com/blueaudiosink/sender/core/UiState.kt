@@ -10,6 +10,8 @@ enum class LinkPhase { IDLE, CONNECTED, STREAMING }
 data class SenderUiState(
     val phase: LinkPhase = LinkPhase.IDLE,
     val resolving: Boolean = false,
+    val connectionStage: String? = null,
+    val compatibleTransport: Boolean = false,
     val targetDeviceId: String? = null,
     val targetName: String? = null,
     val targetIp: String? = null,

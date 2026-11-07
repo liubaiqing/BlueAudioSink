@@ -8,7 +8,7 @@
 | --- | --- |
 | [双端界面规范](06-ui-style-guide.md) | 当前视觉基准、控件用法、UI 技术栈及变更约束 |
 | [架构](01-architecture.md) | 模块职责、生命周期、线程边界与演进约束 |
-| [协议](02-protocol.md) | 当前 BAS1 UDP 线格式和会话语义 |
+| [协议](02-protocol.md) | 当前 BAS2 控制、UDP/TCP 音频及会话语义 |
 | [电脑端](03-pc-implementation.md) | 界面、设置、托盘与 Windows 集成 |
 | [手机端](04-android-implementation.md) | 采集、发送、权限和正式签名构建 |
 | [验收](05-testing-acceptance.md) | 可复用的检查方法、通过条件和验证边界 |

@@ -1,102 +1,61 @@
-# BAS1：当前 Wi-Fi 协议
+# BAS2：当前 Wi-Fi 协议
 
-BAS2 重构目标与验收约束见 [连接层设计](07-bas2-connection-design.md)。应用入口切换前，本页保留当前 BAS1 行为。
+双端必须一起升级。BAS1 音频不会回退。协议面向可信局域网，不提供加密或对抗局域网冒充的认证。
 
-本文是两端共同遵守的线格式和会话规范。修改字段、包长、类型或端口前先更新本文并同步两端；未知字段保留前向兼容，不单端推送不兼容变更。
+## 发现元数据
 
-## 传输与格式
+UDP45678 继续使用原有16字节发现头（magic BAS1），仅复用 OFFER、IDENTITY_QUERY、IDENTITY_REPLY；flags bit7 表示支持 BAS2。其余 BAS1 音频/开始/音量消息不进入正式接收链。旧版元数据用于提示更新，不作为连接确认。
 
-IPv4 UDP，仅用于可信局域网，无认证或加密；音频不重传，远程音量扩展采用有限控制重试。PC 控制/发现端口 45678，音频默认 45679（可配置）；手机单 socket 绑定 45678。音频发往 OFFER 公布的端口，手动 IP 使用默认音频端口。
+- OFFER(type6)：UTF8电脑名+NUL+小端u32音频端口+32字节小写十六进制电脑ID。
+- IDENTITY_QUERY(type11)：16字节随机nonce+32字节ID；全零ID表示初次查询。
+- IDENTITY_REPLY(type12)：原nonce+32字节ID+u32音频端口+UTF8电脑名。单包不超过1200字节，名称至多64字符。
+- 每接口广播、同子网网关及224.0.0.167（TTL1）。历史地址是有限候选，不扫描整段网段。
+- 电脑按入站本地地址/同子网接口回复。发现发送源端口可为临时端口；手机用nonce约束主动查询回复，随后必须通过 TCP 核对 ID。
 
-固定 PCM：48000 Hz、16-bit 小端、双声道 L/R 交错。每包 240 帧（5 ms）、960 字节载荷，含头总长 976 字节；满采集时约 200 包/秒。真实静音照常发送，采集环空等待，短读攒满，不伪造音频包。
+## 控制通道
 
-所有包以 16 字节小端头开始：
+手机主动连接 TCP45678。每帧：小端u32长度（1..16384）+UTF8 JSON对象。字段固定为 `type`、非零u32 `requestId`、`sessionId`、对象 `body`。深度最多16。乱序/陈旧请求不执行，最近128个请求缓存结果；同ID不同内容关闭连接。
 
-| 偏移 | 长度 | 字段 |
+| 请求/应答 | 语义 |
+| --- | --- |
+| hello / welcome | protocol=2、expectedDeviceId、instanceId、name；可携带appRunId/attemptId/pathId。应答电脑ID、名称、实际音频端口和随机128位sessionId |
+| pathConfirmed / pathReady | 手机经UDP收到挑战回复后，通过TCP提交challenge十六进制；一致才就绪 |
+| mediaHello / mediaReady | 独立TCP音频连接使用当前sessionId确认来源及实际两端地址 |
+| start / startAck | 电脑分配新非零u64 streamEpoch（JSON中16位十六进制），清音频统计，随后允许发包 |
+| stop / stopAck | 停止当前流，拒绝后续媒体，已验证队列有限排空；保留控制连接 |
+| heartbeat / heartbeatAck | 每2秒；上报上一轮rttMs；应答phase、audioPackets、audioAgeMs。6秒控制无响应恢复 |
+| volumeGet / volumeState | 返回电脑权威epoch、u32 revision、percent、exclusive、accepted |
+| volumeSet / volumeState | 提交expected epoch/revision及0..100整数percent；冲突不写入，返回权威值 |
+| diagnostics / diagnosticsAck | events至多6条；电脑异步落盘后返回事件ID数组 |
+| error | UpgradeRequired、IdentityMismatch、Busy、NotReady、StaleRequest等明确错误；超时不自动归因防火墙 |
+
+只允许一台手机传音。占用时其他来源的开始与调音被拒绝；电脑明确选择手机可关闭旧来源。旧会话的音量请求不会在新连接重放。
+
+## 传输验证
+
+TCP身份确认后，手机向实际UDP音频端口（默认45679）发送16字节随机挑战；电脑从同一端口回复，手机通过控制通道确认。1.5秒未验证则建立独立 TCP45679 音频连接。UDP本地绑定失败不应破坏可用的TCP控制和媒体路径。
+
+连接成功才显示已连接。发送中若持续发送却1秒没有接收证据，控制正常时进行2秒探测，仍无音频确认则新会话转 TCP。本次健康TCP保持至停止，下一次发送重新优先UDP。TCP发送队列上限40帧/200ms，写阻塞300ms关闭音频通道并恢复。明确断开终止重试，其他失败按1/2/4/8/15秒及抖动退避。
+
+## 音频帧
+
+固定48kHz、16bit、双声道、5ms，即240帧/960字节PCM。UDP音频总长1000字节；探测总长56字节。均使用小端40字节头：
+
+| 偏移 | 字节 | 字段 |
 | --- | --- | --- |
-| 0 | 4 | ASCII BAS1（u32=0x31534142） |
-| 4 | 1 | type |
-| 5 | 1 | flags，bit0=发送端内容不连续 |
-| 6 | 2 | reserved，发送填 0，接收忽略 |
-| 8 | 4 | seq，AUDIO 每包递增，新会话从 0 开始 |
-| 12 | 4 | timestampUs，单调时钟微秒低 32 位 |
+| 0 | 4 | ASCII BAS2 (0x32534142) |
+| 4 | 1 | type：1音频、2挑战、3回复 |
+| 5 | 1 | flags：音频仅bit0不连续；探测为0 |
+| 6 | 2 | headerSize=40 |
+| 8 | 16 | sessionId原始16字节，JSON以32位hex编码，不采用Guid混合端序 |
+| 24 | 8 | streamEpoch，音频非零；探测为0 |
+| 32 | 4 | sequence，按u32回绕 |
+| 36 | 4 | timestampUs，BOOTTIME微秒低32位 |
 
-AUDIO 时间为首帧采样时刻，其余基础包时间为发送时刻，seq=0。音量扩展timestampUs=0，seq用于确认，详见末节。手机使用 BOOTTIME；u32 差值按回绕运算，不把约 71 分钟时间戳回绕视为断流。flags 未定义位、未知类型忽略；无效 magic/长度计 malformed。
+TCP媒体为小端u32=1000+同一BAS2音频帧。每包校验会话、实际路径、流代际、长度及标志。旧流不进入播放队列。PCM不因传输方式改变格式，UDP不重传；20ms有限重排后缺包补零，真实静音正常发送。
 
-| type | 名称 | 方向 | 载荷 |
-| --- | --- | --- | --- |
-| 1 | AUDIO | 手机→PC 音频端口 | 严格 960 字节 PCM |
-| 2 | START | 手机→PC 控制端口 | 空；接收忽略尾随字节 |
-| 3 | STOP | 手机→PC 控制端口 | 空 |
-| 4 | PING | PC→手机 | 空 |
-| 5 | PONG | 手机→PC | 4 字节，原样回填 PING.timestampUs |
-| 6 | OFFER | PC→局域网广播/本地网关 | UTF-8 名称 + NUL + 音频端口 u32 |
-| 7 | HELLO | 手机→PC | UTF-8 手机名称，无 NUL 结尾 |
-| 8 | VOLUME_GET | 手机→PC 控制端口 | clientToken u32 |
-| 9 | VOLUME_SET | 手机→PC 控制端口 | clientToken u32 + epoch u32 + expectedRevision u32 + percent u8 |
-| 10 | VOLUME_STATE | PC→手机 | clientToken u32 + epoch u32 + revision u32 + percent u8 + flags u8（bit0=独占偏好，bit1=此SET确认已应用且修订仍有效） |
+## 诊断与隐私
 
-## 发现与控制
+事件行保持 `[eventId,phoneUnixMs,code,a,b,c,context?]`，ID为32位hex；context为有界对象，记录运行/尝试/路径/会话及系统错误。至多7天、2MiB、4096条，任一达到即轮转。接收确认意味着电脑日志已flush成功，重复交付按eventId识别。首次连接失败可手机导出。
 
-PC 只在 Wi-Fi 模式且接收已启用时每 2 秒从同一控制socket（源端口45678）发送OFFER：保留255.255.255.255，并对在线以太网/Wi-Fi网卡按IPv4掩码计算子网广播，同时向同子网IPv4网关单播，覆盖手机自身作为热点网关及多网卡场景。不扫描IP范围，不改变手机采集与会话协议。忽略回环、链路本地、无效掩码、/31和/32广播；目标去重，单个发送失败继续其他目标，至少一个成功才返回发送成功。每轮重新枚举，网络切换无需重启应用。名称最多 63 字节，按 UTF-8 码点截断；空名称使用 BlueAudioSink。新手机按设备ID去重，无ID旧包按来源IP区分；6秒无OFFER移出发现列表，已保存身份不老化。
-
-手机开始会话前发送 HELLO（名称 1~64 字节，空名称用 Android），然后 START。PC 记录候选，HELLO 不回复也不单独启动播放。没有会话/手选锁定时，可接受来源建立会话；会话存在后其他来源不能抢占。
-
-设置中显式选择手机会清空旧队列、释放旧播放器、重置统计并锁定该来源端点；其余来源 START/AUDIO/STOP/HELLO 不改变当前会话。Wi-Fi 模式停止时清除候选和锁定，不将临时 IP 当作永久身份。
-
-PC 每 2 秒向当前手机发送 PING。手机仅回应已选 PC；PONG 头时间为手机发送时刻 T2，载荷原样回填 PC 的 T1。PC 只接受当前来源和 2 秒内发出的匹配 T1，计算 RTT=T3−T1，接受范围 0~2 秒（不含 0）。偏移=手机−PC=T2−T1−RTT/2。PONG 缺失不停止音频；RTT 是往返观测，不是端到端音频延迟，主页不展示推算单程值。
-
-## 会话与来源
-
-START 初始化新会话、清旧缓冲/统计、隔离旧消费者并预缓冲。START 丢失时首个 AUDIO 可自动建立会话，以该包序号为基线。START.timestampUs 非零时，早于 START−100 ms 的 AUDIO 视为陈旧包；旧版 START=0 兼容为无时间基线。
-
-STOP 单次发送。PC 不再接收该会话音频，播放剩余数据，缓冲耗尽后给声卡 100 ms 尾部排空，总排空上限 500 ms；正常结束不计欠载。STOP 丢失时 5 秒无 AUDIO 超时释放播放器回待机。重复 START 必须先停止旧消费者，不能清空仍在播放的 provider。
-
-## 重排与播放
-
-- expectedSeq 为下一待释放序号，按 int32(seq−expectedSeq) 判断 u32 回绕。已释放旧包计 late，重排表重复包计 dup，均丢弃。
-- 连续 PCM 尽快交付 PlayoutBuffer；缺口最多等待 20 ms，起点为缺口之后最早已到包的到达时间。
-- 截止后缺 1~10 包才按每包 5 ms 补零并记 missing，恢复真数据淡入；更大缺口跳至最近可用序号并记 discontinuities，不制造长静音。前向距离 >200 包重建接收序号并记 resets；不回退已交付声卡的数据。
-- flags.bit0 随具体帧传递到播放，不用全局标志误处理其他帧。网络补零与声卡欠载补零分别计数。
-- 唯一消费时钟为 WASAPI IWaveProvider.Read，无第二个 5 ms 消费定时器。
-- 每 500 ms 更新 target=clamp(ceil((40000+4×J)/1000), BufferBaseMs, BufferMaxMs)。J 是最近 2 秒连续序号包到达间隔与采样间隔差的绝对值均值（微秒）。默认上下限 80/200 ms。
-- target 仅用于首次启动和真实欠载恢复；健康播放不追目标插零或删样。真实 Read 缺数记 underruns 和 outputPaddingFrames；恢复期间保留新 PCM，达到 max(target, 本次 Read 长度) 后恢复，采用双声道等增益 5 ms 淡入。
-- 物理容量 1000 ms，溢出必须计 outputOverflows 并报故障，不静默丢样。长期设备时钟漂移尚无异步采样率校正。
-
-## 统计与状态
-
-丢包率使用最近 10 秒 missing/(received+missing)。独立记录 received、missing、late、duplicates、foreign、stale、malformed、discontinuities、underruns、outputPaddingFrames、outputOverflows。Android sourceWaits 代表等待采集的调度次数，不等于内容丢失；结合 sourceOverflows、sendFailures 与接收侧统计判断。
-
-PC 状态 Armed=监听待机、LinkReady=预缓冲、Flowing=播放器运行（可静音）、Faulted=监听或输出故障。展示层还结合最近音频包年龄、控制响应年龄、输出是否实际运行、恢复/排空状态，不能把控制连接或收到静音等同于有声输出。
-
-## 远程接收音量
-
-可选扩展不改变音频包；旧端忽略未知类型。手机每次选择目标生成非零随机clientToken，先GET读取电脑权威值，禁止把手机旧值写回。PC仅接受当前选定/会话来源，且最近5秒有匹配PONG；音量包不刷新音频/心跳存活时间。未知端、非当前来源、无新鲜心跳不可控制。GET/SET包长严格20/29字节，STATE严格30字节，percent限0–100
-
-PC每次接收器启动生成非零随机epoch，音量/独占/输出设备变化递增revision。SET头seq为非零递增请求ID，PC校验token、epoch、expectedRevision和请求顺序；重复请求只回传当前值，不重复应用，过期请求/修订冲突也回STATE。STATE头seq回填SET请求ID，查询和PC主动通知seq=0。仅匹配请求ID且bit1置位视为成功；本地变更使旧请求成功标记失效，避免“请求静音”和“电脑独占静音”值相同而误判成功、续发旧调高。所有值均小端，revision/请求序号按u32回绕比较
-
-手机滑动合并待发送值，最多约10条/秒、同时只有一个在途SET；松手保留最终意图，收到确认后续发最终值。同请求丢包250ms重试，最多3次；失败放弃待发送值并GET重同步，不在断线重连时补发旧调整。GET约每1秒纠正UDP丢包和发现兼容能力，3秒无STATE禁用滑条；PC修订冲突、独占静音/设备变更通知取消旧拖动意图，不以重试恢复已静音的音量
-
-PC修改软件增益，无需重开播放器；UI通过主线程同步并保存最新值。电脑本地改动主动回传，并有查询兜底。局域网协议仍无认证，不将来源过滤描述为安全认证
-
-## 电脑稳定身份与寻址
-
-电脑在%LocalAppData%/BlueAudioSink/wifi-device-id保存随机UUID（32位小写hex），独立于IP、网卡、电脑名和EXE路径；生成后原子写入，读失败/损坏不悄悄替换身份，明确报错。复制该文件会复制身份，清除配置或重装系统会形成新身份；这不是硬件指纹或加密认证。
-
-OFFER保留原名称+NUL+u32端口，尾部可追加32字节ASCII设备ID；旧手机忽略尾部，新手机将其视为寻址提示，不能据此发送音频。
-
-新增type11 IDENTITY_QUERY，载荷48字节：随机nonce16字节+expectedId32字节（全0表示首次手动/未绑定查询）。type12 IDENTITY_REPLY：nonce16+真实ID32+audioPort u32+名称UTF-8（最多63字节），载荷52–115字节；seq/timestamp均0。PC仅在启用时从控制socket回复，空ID或ID匹配才答复，查询不建立音频会话、不改手机锁定、不复用统计。新手机只接受45678来源、当前nonce、期望ID匹配的回复，并使用实际报文来源IP，不相信载荷地址；随后HELLO和PING确认连接，首次成功PING才写记忆。已知身份不降级到仅地址连接；旧电脑需更新。原手机仍可连接新电脑，PCM与音量线格式不变。
-
-手机点已保存电脑时，按身份主动查询：当前发现地址、同网段历史地址和各本地LAN子网广播，保留有限广播，不扫描IP范围；1秒重试最多10秒，超时明确提示未找到/检查电脑启用及网络放行。点击重试或网络变化可重启尝试，迟到nonce不生效。新鲜已验证连接5秒无PING即停止AUDIO并重新验证身份。网络实例可用/丢失回调（即使新旧IP相同也重新验证）加本地LAN地址指纹定时检查覆盖热点接口；切网清除旧解析/控制状态，先阻断AUDIO和音量SET，再重新寻址，已有授权采集可在验证后新START继续，不能重新自动申请采集授权。
-
-已保存身份查找超时后，收到匹配身份的新鲜OFFER可重新发起有限查询；OFFER仅触发挑战，不直接授权地址或音频。显式清除连接意图后不恢复，身份不匹配不恢复。PC网络代际变化会解除上一网络的端点锁，不修改稳定电脑身份。
-
-## 双端诊断
-
-安卓路由诊断 `Wifi.LanRoute` 数值1为物理局域网绑定，0为系统路由（含热点回退）。`Wifi.VpnRouteRestricted` 表示系统拒绝物理网络绑定，后续通过系统路由尝试通信。VPN 实例变化触发通道重建和身份重验。
-
-支持合并的电脑在 PING flags bit1 声明能力。手机仅在已验证电脑且收到该 PING 时，先回 PONG，再从同一控制套接字发送 type13 DIAGNOSTICS。seq 为批次编号，timestamp 为对应 PING 的时间戳。载荷为最多 1100 字节的 UTF-8 JSON 数组，每批最多 6 条，每条为 `[随机事件ID, 手机Unix毫秒, 事件代码, 数值1, 数值2, 数值3]`。不含音频、设备名、地址、长期设备标识或任意文本。
-
-PC 只接受当前手机控制端点发来的批次，要求对应 PONG 已确认，每秒最多处理一批。写入 JSONL 并按最近 1024 个事件 ID 去重后回 type14 DIAGNOSTICS_ACK，seq 和 timestamp 原样回显。手机只接受当前已验证电脑的匹配 ACK。未确认的记录在后续支持诊断的 PING 补发。用 PING 标记、双端时间和随机事件 ID 关联记录。源端点及 PING 校验不构成加密认证。旧版与新版互连时仍可正常使用音频。
-
-诊断数值：`App.Start` 为版本码和 SDK；`Wifi.SendStats` 为当前发送序号、累计失败数、目标音频端口；`Capture.Stats` 为累计等待次数、环形队列溢出和短读次数；`Capture.Signal` 为当前窗口全零样本数、抽样总数和累计采集包数。全零检测只用于区分「可能无源信号」与「有非零信号」，不代表用户听到的响度。
+每5秒汇总采集、传输接入、播放与队列统计；手机显示的音频丢包估算来源于接收确认，而非控制心跳丢失。禁止记录音频内容、密码、MAC或VPN节点配置。日志含网络地址时提示分享前检查。

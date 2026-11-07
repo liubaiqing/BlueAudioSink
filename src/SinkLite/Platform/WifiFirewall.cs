@@ -60,36 +60,36 @@ namespace SinkLite.Platform
                 "$policy=New-Object -ComObject HNetCfg.FwPolicy2;\n";
             if (operation == "enable")
                 script += @"
+foreach ($protocol in @(17,6)) {
 $rule=New-Object -ComObject HNetCfg.FWRule;
-$rule.Name=$name;
-$rule.Description='BlueAudioSink LAN audio; this executable only; Private profile; local subnet UDP.';
-$rule.ApplicationName=$application;
-$rule.Protocol=17;
-$rule.LocalPorts=$ports;
-$rule.RemoteAddresses='LocalSubnet';
-$rule.Direction=1;
-$rule.Profiles=2;
-$rule.InterfaceTypes='All';
-$rule.EdgeTraversal=$false;
-$rule.Action=1;
-$rule.Enabled=$true;
-$rule.Grouping='BlueAudioSink Wi-Fi';
-$policy.Rules.Add($rule);
+$rule.Name=if ($protocol -eq 17) { $name } else { $name+'.TCP' };
+$rule.Description='BlueAudioSink BAS2; current executable; Private/Public; LocalSubnet only.';
+$rule.ApplicationName=$application; $rule.Protocol=$protocol; $rule.LocalPorts=$ports;
+$rule.RemoteAddresses='LocalSubnet'; $rule.Direction=1; $rule.Profiles=6;
+$rule.InterfaceTypes='All'; $rule.EdgeTraversal=$false; $rule.Action=1; $rule.Enabled=$true;
+$rule.Grouping='BlueAudioSink Wi-Fi'; $policy.Rules.Add($rule);
+}
 ";
             else if (operation == "disable")
                 script += @"
-$rule=$null; try { $rule=$policy.Rules.Item($name) } catch { if ($_.Exception.HResult -ne -2147024894) { throw } }
-if ($null -ne $rule) { $policy.Rules.Remove($name) }
+foreach ($ruleName in @($name,($name+'.TCP'))) {
+$rule=$null; try { $rule=$policy.Rules.Item($ruleName) } catch { if ($_.Exception.HResult -ne -2147024894) { throw } }
+if ($null -ne $rule) { $policy.Rules.Remove($ruleName) }
+}
 ";
             script += @"
-$rule=$null; try { $rule=$policy.Rules.Item($name) } catch { if ($_.Exception.HResult -ne -2147024894) { throw } }
-$exists=$null -ne $rule;
+$exists=$false; $ready=$true;
 $wantedPorts=($ports.Split(',') | Sort-Object) -join ',';
-$actualPorts=if ($exists) { ($rule.LocalPorts -split ',' | ForEach-Object { $_.Trim() } | Sort-Object) -join ',' } else { '' };
-$ready=$exists -and $rule.Enabled -and $rule.ApplicationName -eq $application -and $rule.Protocol -eq 17 -and $actualPorts -eq $wantedPorts -and $rule.RemoteAddresses -eq 'LocalSubnet' -and $rule.Direction -eq 1 -and $rule.Profiles -eq 2 -and $rule.Action -eq 1 -and !$rule.EdgeTraversal;
-$private=($policy.CurrentProfileTypes -band 2) -ne 0;
-$enabled=$policy.FirewallEnabled(2);
-$blocked=$policy.BlockAllInboundTraffic(2);
+foreach ($protocol in @(17,6)) {
+$ruleName=if ($protocol -eq 17) { $name } else { $name+'.TCP' };
+$rule=$null; try { $rule=$policy.Rules.Item($ruleName) } catch { if ($_.Exception.HResult -ne -2147024894) { throw } }
+$present=$null -ne $rule; $exists=$exists -or $present;
+$actualPorts=if ($present) { ($rule.LocalPorts -split ',' | ForEach-Object { $_.Trim() } | Sort-Object) -join ',' } else { '' };
+$ready=$ready -and $present -and $rule.Enabled -and $rule.ApplicationName -eq $application -and $rule.Protocol -eq $protocol -and $actualPorts -eq $wantedPorts -and $rule.RemoteAddresses -eq 'LocalSubnet' -and $rule.Direction -eq 1 -and $rule.Profiles -eq 6 -and $rule.Action -eq 1 -and !$rule.EdgeTraversal;
+}
+$private=($policy.CurrentProfileTypes -band 6) -ne 0;
+$enabled=(($policy.CurrentProfileTypes -band 2) -ne 0 -and $policy.FirewallEnabled(2)) -or (($policy.CurrentProfileTypes -band 4) -ne 0 -and $policy.FirewallEnabled(4));
+$blocked=(($policy.CurrentProfileTypes -band 2) -ne 0 -and $policy.BlockAllInboundTraffic(2)) -or (($policy.CurrentProfileTypes -band 4) -ne 0 -and $policy.BlockAllInboundTraffic(4));
 Write-Output ('BASFW1|{0}|{1}|{2}|{3}|{4}|{5}' -f [int]$exists,[int]$ready,[int]$private,[int]$enabled,[int]$blocked,[int]$policy.LocalPolicyModifyState);
 ";
             return script;

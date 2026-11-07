@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 internal enum class ConnectionPhase { STOPPED, FINDING, CONTROL, IDENTITY, VERIFYING, READY, STREAMING, RECOVERING, FAILED }
+internal class UdpUnavailable : java.io.IOException("UDP audio was not acknowledged; switching to TCP")
 internal data class ConnectionSnapshot(
     val phase: ConnectionPhase = ConnectionPhase.STOPPED,
     val attemptId: String? = null,
@@ -18,6 +19,7 @@ internal data class ConnectionSnapshot(
     val sessionId: String? = null,
     val usingTcp: Boolean = false,
     val error: String? = null,
+    val streamEpoch: String? = null,
 )
 
 internal interface SessionConnection : RouteProbe {
@@ -25,9 +27,12 @@ internal interface SessionConnection : RouteProbe {
     val deviceName: String
     val sessionId: String
     val usingTcp: Boolean
+    val streamEpoch: String get() = ""
     fun start()
     fun stop()
     fun heartbeat()
+    fun preferTcp() {}
+    fun trace(attemptId: String, pathId: String) {}
     fun sendAudio(payload: ByteArray, timestampUs: Int, discontinuity: Boolean)
 }
 
@@ -58,6 +63,7 @@ internal class SessionCoordinator(
     private var retry: ScheduledFuture<*>? = null
     private var retryCount = 0
     private var lastSuccessfulPath: String? = null
+    private var fallbackTcp = false
 
     init {
         owner.scheduleWithFixedDelay({
@@ -72,11 +78,18 @@ internal class SessionCoordinator(
     private fun post(work: () -> Unit) {
         if (!closed.get()) runCatching { owner.execute { if (!closed.get()) work() } }
     }
+    fun application(work: (SessionConnection) -> Unit) {
+        val session = snapshot.sessionId
+        post { val current = active?.connection; if (session != null && current?.sessionId == session) try { work(current) } catch (error: Exception) { recover(error) } }
+    }
+    fun reconnect() = post { if (targetSelected) { release(); begin() } }
 
     fun networkChanged(routes: List<LocalRoute>) = post {
+        val previous = locals
         locals = routes.toList()
         val current = active
         if (current != null && RoutePlanner.stillPresent(current.route.local, locals)) return@post
+        if (current == null && race != null && previous.all { RoutePlanner.stillPresent(it,locals) }) return@post
         if (targetSelected) {
             if (current != null) recover(java.io.IOException("Active interface lost"), immediate = true)
             else begin()
@@ -93,6 +106,7 @@ internal class SessionCoordinator(
             if (targetIntent.get() != intent) return@post
             release()
             expectedId = deviceId
+            fallbackTcp = false
             addresses = knownAddresses.filter { RoutePlanner.ipv4(it) != null }.distinct().take(32)
             targetSelected = true
             retryCount = 0
@@ -112,8 +126,10 @@ internal class SessionCoordinator(
         if (!enabled) pcm = null
         post {
             if (enabled != wantSending.get()) return@post
+            if (!enabled) fallbackTcp = false
             val current = active ?: return@post
             try {
+                if (enabled && current.connection.usingTcp && !fallbackTcp && snapshot.phase != ConnectionPhase.STREAMING) { begin(); return@post }
                 if (enabled && snapshot.phase != ConnectionPhase.STREAMING) {
                     current.connection.start()
                     pcm = current.connection
@@ -166,14 +182,14 @@ internal class SessionCoordinator(
         publish(ConnectionPhase.CONTROL)
         val identity = expectedId
         val round = RouteRace<SessionConnection> { route ->
-            factory(route, identity) { phase -> post { if (attempt == id && active == null) publish(phase) } }
+            factory(route, identity) { phase -> post { if (attempt == id && active == null) publish(phase) } }.also { it.trace(id,route.key); if (fallbackTcp) it.preferTcp() }
         }
         race = round
         rounds.execute {
             try {
                 val winner = round.select(candidates) { failure -> post {
                     if (attempt == id) diagnostic("Bas2.RouteFailed", mapOf("attemptId" to id, "pathId" to failure.route.key,
-                        "errorType" to failure.error.javaClass.simpleName, "error" to failure.error.message.orEmpty()))
+                        "errorType" to failure.error.javaClass.simpleName, "error" to failure.error.message.orEmpty(), "rootCause" to failure.error.cause?.toString().orEmpty()))
                 } }
                 if (closed.get()) winner.connection.close()
                 else {
@@ -216,6 +232,7 @@ internal class SessionCoordinator(
     }
 
     private fun recover(error: Exception, immediate: Boolean = false) {
+        if (error is UdpUnavailable) fallbackTcp = true
         release()
         if (closed.get()) return
         publish(ConnectionPhase.RECOVERING, "${error.javaClass.simpleName}: ${error.message}")
@@ -246,7 +263,7 @@ internal class SessionCoordinator(
         if (closed.get()) return
         val current = active
         snapshot = ConnectionSnapshot(phase, attempt, current?.route, current?.connection?.deviceId,
-            current?.connection?.deviceName, current?.connection?.sessionId, current?.connection?.usingTcp ?: false, error)
+            current?.connection?.deviceName, current?.connection?.sessionId, current?.connection?.usingTcp ?: false, error,current?.connection?.streamEpoch)
         runCatching { changed(snapshot) }
     }
 

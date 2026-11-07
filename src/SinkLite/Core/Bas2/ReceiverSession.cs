@@ -40,6 +40,7 @@ namespace SinkLite.Core.Bas2
     }
 
     internal enum ConnectionPhase { AwaitingHello, VerifyingTransport, Ready, Streaming, Closed }
+    internal sealed record ApplicationReply(string Type, JsonObject Body);
 
     // Called only by the connection owner, which serializes control and media events.
     internal sealed class ReceiverSession
@@ -57,9 +58,27 @@ namespace SinkLite.Core.Bas2
         public ulong StreamEpoch { get; private set; }
         public string InstanceId { get; private set; }
         public string PhoneName { get; private set; }
+        public string AppRunId { get; private set; }
+        public string AttemptId { get; private set; }
+        public string PathId { get; private set; }
         public bool UsingTcp { get; private set; }
         public long LastHeartbeatMs { get; private set; }
         public int AudioPort { get; }
+        public long AudioPackets { get; private set; }
+        public long LastAudioMs { get; private set; }
+        public double RttMs { get; private set; } = double.NaN;
+        public void NoteAudio(long now) { AudioPackets++; LastAudioMs = now; }
+        public byte[] ValidateApplication(ControlMessage message)
+        {
+            if (message.SessionId != IdText || Phase == ConnectionPhase.Closed) throw new InvalidDataException("Wrong session");
+            if (replies.TryGetValue(message.RequestId, out var cached)) {
+                if (cached.Type != message.Type || cached.Session != message.SessionId || cached.Body != message.Body.GetRawText()) throw new InvalidDataException("Request ID reused");
+                return cached.Reply;
+            }
+            if (lastRequest != 0 && unchecked((int)(message.RequestId - lastRequest)) <= 0) return Reply("error", message.RequestId, new JsonObject { ["code"] = "StaleRequest" });
+            if (Phase != ConnectionPhase.Ready && Phase != ConnectionPhase.Streaming) return Cache(message, Reply("error", message.RequestId, new JsonObject { ["code"] = "NotReady" }));
+            return null;
+        }
 
         public ReceiverSession(string deviceId, string deviceName, int audioPort, long nowMs, Func<ulong> nextEpoch)
         {
@@ -70,7 +89,7 @@ namespace SinkLite.Core.Bas2
             LastHeartbeatMs = nowMs;
         }
 
-        public byte[] Handle(ControlMessage message, long nowMs, bool mayStart = true)
+        public byte[] Handle(ControlMessage message, long nowMs, bool mayStart = true, ApplicationReply application = null)
         {
             if (Phase == ConnectionPhase.Closed) throw new InvalidDataException("Session closed");
             string body = message.Body.GetRawText();
@@ -96,6 +115,7 @@ namespace SinkLite.Core.Bas2
                     InstanceId = StringField(message.Body, "instanceId");
                     if (InstanceId.Length != 32 || !Guid.TryParseExact(InstanceId, "N", out _)) throw new InvalidDataException("Invalid instance ID");
                     PhoneName = StringField(message.Body, "name");
+                    AppRunId = OptionalString(message.Body,"appRunId"); AttemptId = OptionalString(message.Body,"attemptId"); PathId = OptionalString(message.Body,"pathId");
                     if (PhoneName.Length > 64) throw new InvalidDataException("Phone name too long");
                     Phase = ConnectionPhase.VerifyingTransport;
                     result = Reply("welcome", message.RequestId, new JsonObject { ["protocol"] = 2, ["deviceId"] = deviceId, ["name"] = deviceName, ["audioPort"] = AudioPort });
@@ -108,12 +128,15 @@ namespace SinkLite.Core.Bas2
                     result = Reply("pathReady", message.RequestId, new JsonObject { ["transport"] = "udp" });
                     break;
                 case "heartbeat":
+                    if (message.Body.TryGetProperty("rttMs",out var roundTrip) && roundTrip.ValueKind == JsonValueKind.Number && roundTrip.TryGetDouble(out double rtt) && rtt >= 0 && rtt <= 10000) RttMs = rtt;
                     LastHeartbeatMs = nowMs;
-                    result = Reply("heartbeatAck", message.RequestId, new JsonObject { ["phase"] = Phase.ToString() });
+                    result = Reply("heartbeatAck", message.RequestId, new JsonObject { ["phase"] = Phase.ToString(), ["audioPackets"] = AudioPackets,
+                        ["audioAgeMs"] = LastAudioMs == 0 ? -1 : nowMs - LastAudioMs });
                     break;
                 case "start" when Phase == ConnectionPhase.Ready || Phase == ConnectionPhase.Streaming:
                     if (!mayStart) return Cache(message, Reply("error", message.RequestId, new JsonObject { ["code"] = "Busy" }));
                     StreamEpoch = nextEpoch();
+                    AudioPackets = 0; LastAudioMs = 0;
                     if (StreamEpoch == 0) throw new InvalidOperationException("Zero stream epoch");
                     Phase = ConnectionPhase.Streaming;
                     result = Reply("startAck", message.RequestId, new JsonObject { ["streamEpoch"] = StreamEpoch.ToString("x16") });
@@ -124,6 +147,7 @@ namespace SinkLite.Core.Bas2
                     result = Reply("stopAck", message.RequestId, new JsonObject());
                     break;
                 default:
+                    if (application != null) { result = Reply(application.Type, message.RequestId, application.Body); break; }
                     return Cache(message, Reply("error", message.RequestId, new JsonObject { ["code"] = "InvalidStateOrMessage" }));
             }
             LastHeartbeatMs = nowMs;
@@ -141,7 +165,7 @@ namespace SinkLite.Core.Bas2
 
         public bool ObserveProbe(MediaFrame frame)
         {
-            if (Phase != ConnectionPhase.VerifyingTransport || frame.Type != 2 || !frame.SessionId.AsSpan().SequenceEqual(Id)) return false;
+            if (Phase == ConnectionPhase.AwaitingHello || Phase == ConnectionPhase.Closed || UsingTcp || frame.Type != 2 || !frame.SessionId.AsSpan().SequenceEqual(Id)) return false;
             probeChallenge = (byte[])frame.Payload.Clone();
             return true;
         }
@@ -166,5 +190,7 @@ namespace SinkLite.Core.Bas2
                 throw new InvalidDataException("Missing BAS2 field " + name);
             return value.GetString();
         }
+        private static string OptionalString(JsonElement body,string key)
+        { if (!body.TryGetProperty(key,out var value)) return ""; if (value.ValueKind != JsonValueKind.String || value.GetString().Length > 256) throw new InvalidDataException("Invalid trace field"); return value.GetString(); }
     }
 }

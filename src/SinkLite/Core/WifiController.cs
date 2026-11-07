@@ -82,6 +82,7 @@ namespace SinkLite.Core
 
         public string LocalAddress { get; set; }
         public long NetworkGeneration { get; set; }
+        public bool CompatibleTransport { get; set; }
 
         public DateTime ChangedAt { get; set; } = DateTime.Now;
     }
@@ -106,16 +107,18 @@ namespace SinkLite.Core
         private long networkGeneration;
         private readonly Func<WifiLanAddress[]> networkProvider;
 
-        private WifiReceiver receiver;
+        private IWifiReceiver receiver;
+        private readonly bool legacyTestTransport;
         private System.Threading.Timer offerTimer;
         private bool enabled;
         private string lastError;
         private DateTime lastOfferLog = DateTime.MinValue;
         private DateTime lastOfferErrorLog = DateTime.MinValue;
 
-        public WifiController(Log log, int audioPort, int bufferBaseMs, int bufferMaxMs, WifiOutputOptions outputOptions = null, Func<WifiLanAddress[]> networkProvider = null)
+        public WifiController(Log log, int audioPort, int bufferBaseMs, int bufferMaxMs, WifiOutputOptions outputOptions = null, Func<WifiLanAddress[]> networkProvider = null, bool legacyTestTransport = false)
         {
             this.log = log;
+            this.legacyTestTransport = legacyTestTransport;
             this.outputOptions = outputOptions ?? new WifiOutputOptions();
             this.audioPort = audioPort;
             this.bufferBaseMs = bufferBaseMs;
@@ -159,13 +162,13 @@ namespace SinkLite.Core
                 }
 
                 lastError = null;
-                WifiReceiver created = new WifiReceiver(
+                IWifiReceiver created = legacyTestTransport ? new WifiReceiver(
                     log,
                     WifiTransport.ControlPort,
                     audioPort,
                     bufferBaseMs,
                     bufferMaxMs,
-                    deviceName,outputOptions);
+                    deviceName,outputOptions) : new Bas2.WifiReceiverFacade(log, WifiTransport.ControlPort, audioPort, bufferBaseMs, bufferMaxMs, deviceName, outputOptions);
 
                 created.RemoteVolumeChanged += () => RemoteVolumeChanged?.Invoke();
                 if (!created.Start())
@@ -257,7 +260,7 @@ namespace SinkLite.Core
 
         public void Stop(string mode)
         {
-            WifiReceiver current;
+            IWifiReceiver current;
             System.Threading.Timer timer;
 
             lock (sync)
@@ -290,7 +293,7 @@ namespace SinkLite.Core
 
         private void OfferTick(object state)
         {
-            WifiReceiver current;
+            IWifiReceiver current;
             lock (sync)
             {
                 RefreshNetworkLocked();
@@ -325,7 +328,7 @@ namespace SinkLite.Core
         {
             get
             {
-                WifiReceiver rx;
+                IWifiReceiver rx;
                 string error;
                 lock (sync)
                 {

@@ -36,7 +36,7 @@ static class NetworkRecoveryRegression
         });
         Test("A changed LAN generation cannot restore an old reconnect cache",()=>{
             var addresses=new[]{Lan("192.168.233.68")};
-            using var controller=new WifiController(log,0,80,200,null,()=>addresses);
+            using var controller=new WifiController(log,0,80,200,null,()=>addresses,legacyTestTransport:true);
             using var rx=new WifiReceiver(log,0,0,80,200,"generation");Check(rx.Start(),"bind");
             var flags=BindingFlags.NonPublic|BindingFlags.Instance;
             typeof(WifiController).GetField("receiver",flags).SetValue(controller,rx);

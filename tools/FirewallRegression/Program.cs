@@ -14,7 +14,7 @@ class Program
             Assert(WifiFirewall.RuleName(app) == WifiFirewall.RuleName(app.ToUpperInvariant()), "Unstable identity");
             Assert(WifiFirewall.RuleName(app) != WifiFirewall.RuleName(app + ".copy"), "Path collision");
         });
-        Test("Only valid specific UDP ports accepted", () => {
+        Test("Only valid specific BAS2 ports accepted", () => {
             Assert(WifiFirewall.Ports(45679) == "45678,45679" && WifiFirewall.Ports(45678) == "45678", "Port construction");
             foreach (int invalid in new[] { -1, 0, 80, 65536 }) {
                 try { WifiFirewall.Ports(invalid); throw new Exception("Accepted invalid port"); }
@@ -57,17 +57,19 @@ function Get-TestRule { return [pscustomobject]@{ Name='';Description='';Applica
                 .Replace("New-Object -ComObject HNetCfg.FwPolicy2", "Get-TestPolicy")
                 .Replace("New-Object -ComObject HNetCfg.FWRule", "Get-TestRule");
             string script = mock + Adapt("enable") + Adapt("enable") + @"
-if ($global:store.Rules.Items.Count -ne 1) { throw 'Duplicate rules' }
+if ($global:store.Rules.Items.Count -ne 2) { throw 'Duplicate rules' }
 $testRule=$global:store.Rules.Items.Values | Select-Object -First 1
-if ($testRule.Profiles -ne 2 -or $testRule.Direction -ne 1 -or $testRule.Protocol -ne 17 -or $testRule.RemoteAddresses -ne 'LocalSubnet' -or $testRule.Action -ne 1 -or $testRule.EdgeTraversal) { throw 'Overbroad rule' }
+if ($testRule.Profiles -ne 6 -or $testRule.Direction -ne 1 -or $testRule.Protocol -notin @(6,17) -or $testRule.RemoteAddresses -ne 'LocalSubnet' -or $testRule.Action -ne 1 -or $testRule.EdgeTraversal) { throw 'Overbroad rule' }
 " + Adapt("enable", 50001) + Adapt("query", 50001) + Adapt("disable", 50001) + Adapt("disable", 50001);
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"))
                 { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (string arg in new[] { "-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(script)) }) start.ArgumentList.Add(arg);
+            string scriptFile = Path.Combine(Path.GetTempPath(), "bas2-firewall-" + Guid.NewGuid().ToString("N") + ".ps1");
+            File.WriteAllText(scriptFile, script, new UTF8Encoding(true));
+            foreach (string arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptFile }) start.ArgumentList.Add(arg);
             using var process = Process.Start(start);
             var output = process.StandardOutput.ReadToEndAsync(); var errors = process.StandardError.ReadToEndAsync();
             Assert(process.WaitForExit(15000), "PowerShell timed out");
-            string lines = output.GetAwaiter().GetResult(); string error = errors.GetAwaiter().GetResult();
+            string lines = output.GetAwaiter().GetResult(); string error = errors.GetAwaiter().GetResult(); File.Delete(scriptFile);
             Assert(process.ExitCode == 0, error);
             var states = lines.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(WifiFirewall.ParseStatus).ToArray();
             Assert(states.Length == 6 && states.Take(4).All(s => s.RuleReady) && states.Skip(4).All(s => s.Available && !s.RuleExists), "Idempotence or post-write verification failed: " + lines);

@@ -17,14 +17,17 @@ class SessionCoordinatorTest {
         override val deviceId = "a".repeat(32)
         override val deviceName = "test-PC"
         override val sessionId = java.util.UUID.randomUUID().toString()
-        override val usingTcp = false
+        @Volatile var tcpPreferred = false
+        override val usingTcp get() = tcpPreferred
+        override fun preferTcp() { tcpPreferred = true }
+        @Volatile var heartbeatFailure: Exception? = null
         val closes = AtomicInteger()
         val sent = AtomicInteger()
         val starts = AtomicInteger()
         override fun verify() = verifyWork()
         override fun start() { starts.incrementAndGet() }
         override fun stop() { }
-        override fun heartbeat() { }
+        override fun heartbeat() { heartbeatFailure?.let { throw it } }
         override fun sendAudio(payload: ByteArray, timestampUs: Int, discontinuity: Boolean) { sent.incrementAndGet() }
         override fun close() { closes.incrementAndGet() }
     }
@@ -97,6 +100,24 @@ class SessionCoordinatorTest {
             await { session.snapshot.phase == ConnectionPhase.STOPPED }
             Thread.sleep(1200)
             assertEquals(1, attempts.get())
+        } finally { session.close() }
+    }
+
+    @Test fun unacknowledgedUdpUsesTcpUntilStopThenRetriesUdp() {
+        val connections = java.util.Collections.synchronizedList(mutableListOf<Fake>())
+        val session = SessionCoordinator({ _, _, _ -> Fake().also {
+            if (connections.isEmpty()) it.heartbeatFailure = UdpUnavailable()
+            connections.add(it)
+        } }, {}, retryJitter = { 0 })
+        try {
+            session.networkChanged(listOf(wifi)); session.selectDevice(null,listOf("192.168.0.165")); session.setSending(true)
+            await { session.snapshot.phase == ConnectionPhase.STREAMING && session.snapshot.usingTcp }
+            assertTrue(connections.last().tcpPreferred)
+            session.setSending(false)
+            await { session.snapshot.phase == ConnectionPhase.READY }
+            session.setSending(true)
+            await { session.snapshot.phase == ConnectionPhase.STREAMING && !session.snapshot.usingTcp }
+            assertFalse(connections.last().tcpPreferred)
         } finally { session.close() }
     }
 }

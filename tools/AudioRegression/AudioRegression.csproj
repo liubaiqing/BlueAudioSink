@@ -6,6 +6,7 @@
     <Compile Include="../../src/SinkLite/Core/WasapiOutputDevice.cs" Link="WasapiOutputDevice.cs" />
     <Compile Include="../../src/SinkLite/Core/PcmOutputProviders.cs" Link="PcmOutputProviders.cs" />
     <Compile Include="../../src/SinkLite/Core/AudioOutput.cs" Link="AudioOutput.cs" />
+    <Compile Include="../../src/SinkLite/Core/IWifiReceiver.cs" Link="IWifiReceiver.cs" />
     <Compile Include="../../src/SinkLite/Core/WifiReceiver.cs" Link="WifiReceiver.cs" />
     <Compile Include="../../src/SinkLite/Core/Bas2/*.cs" Link="Bas2/%(Filename)%(Extension)" />
     <Compile Include="../../src/SinkLite/Core/WifiVolumeControl.cs" Link="WifiVolumeControl.cs" />

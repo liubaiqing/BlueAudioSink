@@ -14,7 +14,7 @@ data class DiscoveredDevice(
 /**
  * 发现列表维护器（协议第 8 节）。
  *
- * socket 与包解析由 [UdpSender] 统一持有（手机只建一个 45678 socket），
+ * 发现socket与解析由BAS2 LanDiscovery独立持有，
  * 本类按设备身份去重，旧包按 IP 区分、6 秒过期、把最新列表推给界面。
  */
 class DiscoveryClient(private val onDevices: (List<DiscoveredDevice>) -> Unit) {
@@ -49,7 +49,7 @@ class DiscoveryClient(private val onDevices: (List<DiscoveredDevice>) -> Unit) {
         synchronized(lock) { seen.clear() }
     }
 
-    /** 收到 OFFER 时由 UdpSender 的接收线程调用。 */
+    /** 收到 OFFER 时由 LanDiscovery 的接收线程调用。 */
     fun offer(device: DiscoveredDevice) {
         val snapshot = synchronized(lock) {
             seen[device.deviceId ?: device.ip] = device

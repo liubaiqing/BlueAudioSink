@@ -29,7 +29,7 @@ namespace SinkLite.UI
             }
             else if (s.State == SinkState.Busy || s.State == SinkState.Backoff)
             {
-                v.Title = "正在准备连接"; v.Description = "连接准备好后会自动接收音频。"; v.Tone = ConnectionTone.Ready;
+                v.Title = "正在准备连接"; v.Description = s.Detail ?? "连接准备好后会自动接收音频。"; v.Tone = ConnectionTone.Ready;
             }
             else if (!s.Enabled)
             {
@@ -68,6 +68,7 @@ namespace SinkLite.UI
                 v.Description = v.PhoneReady ? "在手机上点击「开始发送」。" : "等待手机响应，请在手机端选择这台电脑。";
                 v.Tone = v.PhoneReady ? ConnectionTone.Ready : ConnectionTone.Neutral;
             }
+            if (s.CompatibleTransport) v.Description += " 当前使用兼容传输。";
             return v;
         }
     }

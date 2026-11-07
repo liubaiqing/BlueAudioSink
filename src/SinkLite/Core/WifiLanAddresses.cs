@@ -20,7 +20,7 @@ namespace SinkLite.Core
         {
             if(type!=NetworkInterfaceType.Wireless80211 && type!=NetworkInterfaceType.Ethernet) return false;
             string text=(description ?? "").ToLowerInvariant();
-            return !new[]{"vpn","tap-","wintun","wireguard","vmware","virtual","hyper-v","tunnel","loopback"}.Any(text.Contains);
+            return !new[]{"vpn","tap-","wintun","wireguard","vmware","hyper-v","tunnel","loopback"}.Any(text.Contains);
         }
         public static WifiLanAddress[] Read()
         {

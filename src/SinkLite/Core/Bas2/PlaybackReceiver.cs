@@ -13,6 +13,8 @@ namespace SinkLite.Core.Bas2
     {
         private readonly object gate = new();
         private readonly Queue<MediaFrame> pending = new(40);
+        private readonly Queue<ReceiverPeerSnapshot> trace = new();
+        private readonly Dictionary<string,string> phases = new();
         private readonly AutoResetEvent wake = new(false);
         private readonly WifiReceiver playback;
         private readonly ControlServer server;
@@ -64,6 +66,11 @@ namespace SinkLite.Core.Bas2
             lock (gate)
             {
                 if (!running) return;
+                string phase = peer.Phase + "/" + peer.StreamEpoch;
+                if (!phases.TryGetValue(peer.SessionId,out var previous) || previous != phase || peer.Error != null) {
+                    if (trace.Count == 64) trace.Dequeue(); trace.Enqueue(peer); phases[peer.SessionId] = phase;
+                    if (peer.Phase == ConnectionPhase.Closed) phases.Remove(peer.SessionId);
+                }
                 if (peer.Phase == ConnectionPhase.Streaming)
                 {
                     if (StreamKey(incoming) != StreamKey(peer)) pending.Clear();
@@ -98,18 +105,23 @@ namespace SinkLite.Core.Bas2
             {
                 ReceiverPeerSnapshot current, ended;
                 MediaFrame frame;
+                ReceiverPeerSnapshot evidence;
                 lock (gate)
                 {
                     if (!running) break;
                     current = incoming;
                     ended = lastEnded;
                     frame = pending.Count == 0 ? null : pending.Dequeue();
+                    evidence = trace.Count == 0 ? null : trace.Dequeue();
                     // Audio accepted before STOP must reach finite drain. A disconnected or
                     // replaced stream is discarded immediately; the server rejects post-STOP audio.
                     if (endRequested && frame == null) { current = incoming = null; endRequested = false; }
                 }
                 try
                 {
+                    if (evidence != null) log.Info("Bas2.Session", ("appRunId",evidence.AppRunId),("attemptId",evidence.AttemptId),("pathId",evidence.PathId),
+                        ("sessionId",evidence.SessionId),("streamEpoch",evidence.StreamEpoch),("phase",evidence.Phase.ToString()),("tcp",evidence.UsingTcp),
+                        ("local",evidence.LocalAddress),("remote",evidence.RemoteAddress),("error",evidence.Error));
                     if (StreamKey(current) != StreamKey(processed))
                     {
                         if (processed != null)
@@ -141,19 +153,24 @@ namespace SinkLite.Core.Bas2
         public void SetBufferBase(int milliseconds) => playback.SetBufferBase(milliseconds);
         public void RefreshOutput() => playback.RefreshOutput();
         public ReceiverPeerSnapshot[] GetPeers() => server.GetPeers();
+        public void SelectPeer(string instanceId) => server.SelectPeer(instanceId);
+        public Func<ReceiverPeerSnapshot, ControlMessage, Task<ApplicationReply>> ApplicationHandler { set => server.ApplicationHandler = value; }
 
         public WifiSnapshot GetSnapshot()
         {
             var snapshot = playback.GetSnapshot();
             var peers = server.GetPeers();
             var peer = peers.FirstOrDefault(item => item.Phase == ConnectionPhase.Streaming) ??
-                peers.FirstOrDefault(item => item.Phase == ConnectionPhase.Ready);
+                peers.FirstOrDefault(item => item.Phase == ConnectionPhase.Ready) ?? peers.FirstOrDefault(item => item.Phase == ConnectionPhase.VerifyingTransport);
             if (peer != null)
             {
                 snapshot.Remote = new IPEndPoint(peer.RemoteAddress, 0).ToString();
                 snapshot.DeviceName = peer.PhoneName;
                 snapshot.LocalAddress = peer.LocalAddress.ToString();
                 snapshot.ControlAgeMs = Math.Max(0, Environment.TickCount64 - peer.LastHeartbeatMs);
+                if (peer.Phase == ConnectionPhase.VerifyingTransport) { snapshot.State = SinkState.Busy; snapshot.Detail = "正在验证手机传输"; snapshot.ControlAgeMs = double.NaN; }
+                snapshot.RttMs = peer.RttMs;
+                snapshot.CompatibleTransport = peer.UsingTcp;
                 if (snapshot.State == SinkState.Armed) snapshot.Detail = "已连接，等待手机发送音频";
                 if (peer.UsingTcp) snapshot.Detail += "（兼容传输）";
             }

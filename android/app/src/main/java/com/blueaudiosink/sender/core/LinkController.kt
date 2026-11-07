@@ -8,7 +8,8 @@ import com.blueaudiosink.sender.capture.BufferTier
 import com.blueaudiosink.sender.net.DiscoveredDevice
 import com.blueaudiosink.sender.net.DiscoveryClient
 import com.blueaudiosink.sender.net.PacketCodec
-import com.blueaudiosink.sender.net.UdpSender
+import com.blueaudiosink.sender.net.SenderListener
+import com.blueaudiosink.sender.net.bas2.Bas2Sender
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,7 +27,7 @@ import kotlinx.coroutines.flow.update
  * 因此「已连接」的判据是「最近 5 秒收到过 PC 的 PING」；
  * 丢包率是控制通道（PING）丢失率；RTT 由 PC 计算并显示在 PC 界面（音量状态不携带 RTT）。
  */
-object LinkController : UdpSender.Listener {
+object LinkController : SenderListener {
 
     /** PC 每 2 秒一次 PING；间隔超过该值即认定中间丢了一个。 */
     private const val PING_PERIOD_MS = 2_000L
@@ -45,7 +46,7 @@ object LinkController : UdpSender.Listener {
     @Volatile
     private var deviceName: String = "Android 手机"
 
-    private var sender: UdpSender? = null
+    private var sender: Bas2Sender? = null
     private var discovery: DiscoveryClient? = null
     private var discoveryActive = false
 
@@ -231,9 +232,11 @@ object LinkController : UdpSender.Listener {
         }
     }
 
-    // ---------------------------------------------------------------- UdpSender.Listener
+    // ---------------------------------------------------------------- SenderListener
 
     override fun onOffer(device: DiscoveredDevice) { discovery?.offer(device) }
+    override fun onStage(stage: String?, compatible: Boolean) { _state.update { it.copy(connectionStage=stage,compatibleTransport=compatible) } }
+    override fun onAudioReceipt(sent: Long, received: Long) { if(sent > 0) _state.update { it.copy(lossPermille=(((sent-received).coerceAtLeast(0)*1000)/sent).toInt().coerceIn(0,1000)) } }
     override fun onResolving(active: Boolean, error: String?) {
         if (active) Diagnostics.record("Wifi.Resolve")
         if (error != null) Diagnostics.record("Wifi.ResolveFailed")
@@ -354,7 +357,7 @@ object LinkController : UdpSender.Listener {
             if (!existing.isOpen() && !existing.open()) return false
             return true
         }
-        val udp = UdpSender(context).also { it.listener = this }
+        val udp = Bas2Sender(context) { deviceName }.also { it.listener = this }
         if (!udp.open()) return false
         sender = udp
         startWatchdog()

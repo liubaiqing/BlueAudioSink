@@ -31,7 +31,7 @@ namespace SinkLite.Core
     ///   - 缺口补静音；d>5 记断流并 5 ms 淡入；d>10 清队重缓冲；
     ///   - 欠载补静音并重缓冲到 lastTarget；STOP 排空 ≤500 ms；5 秒无 AUDIO 回 Armed。
     /// </summary>
-    internal sealed class WifiReceiver : IDisposable
+    internal sealed class WifiReceiver : IWifiReceiver
     {
         private const int TimeoutMs = 5000;
         private const int DrainTimeoutMs = 500;

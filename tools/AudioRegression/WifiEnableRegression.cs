@@ -15,7 +15,7 @@ static class WifiEnableRegression
             Check(view.Title=="Wi-Fi 已断开"&&view.Description.Contains("启用")&&!view.PhoneReady&&!view.StreamReady&&!view.OutputReady,"disabled UI claims a live link");
             view=ConnectionPresentation.Wifi(new WifiSnapshot{Enabled=true,State=SinkState.Armed});
             Check(view.Title=="等待手机响应"&&!view.PhoneReady,"enabling claimed a confirmed connection");
-            using var controller=new WifiController(log,0,80,200);
+            using var controller=new WifiController(log,0,80,200,legacyTestTransport:true);
             Check(!controller.Current.Enabled&&controller.Current.TargetMs==80,"disabled state lost configured prefill");
         });
         Test("Wi-Fi disconnect closes both sockets and discovery; explicit enable can listen again",()=>{

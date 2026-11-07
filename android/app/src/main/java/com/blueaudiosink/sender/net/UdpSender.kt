@@ -34,14 +34,7 @@ import java.util.concurrent.Executors
  */
 class UdpSender(context: Context) {
 
-    interface Listener {
-        fun onResolving(active: Boolean, error: String?)
-        fun onResolved(device: DiscoveredDevice)
-        fun onOffer(device: DiscoveredDevice)
-        fun onPing(t1Us: Int, receivedAtUs: Int)
-        fun onRemoteVolume(percent: Int?, ready: Boolean)
-        fun onError(message: String)
-    }
+    interface Listener : SenderListener
 
     @Volatile
     var listener: Listener? = null

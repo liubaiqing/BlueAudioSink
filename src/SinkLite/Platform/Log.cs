@@ -119,17 +119,17 @@ namespace SinkLite.Platform
             Write("error", eventName, fields);
         }
 
-        public bool WriteAndroidEvent(string id, long phoneUnixMs, string code, long a, long b, long c, uint pingToken)
+        public bool WriteAndroidEvent(string id, long phoneUnixMs, string code, long a, long b, long c, uint pingToken, string context = null)
         {
             lock (sync)
             {
                 if (androidEventIds.Contains(id)) return true;
                 if (!Write("info", "Android." + code, new (string, object)[] {
                     ("id", id), ("phoneUnixMs", phoneUnixMs),
-                    ("pingToken", pingToken), ("a", a), ("b", b), ("c", c) })) return false;
+                    ("pingToken", pingToken), ("a", a), ("b", b), ("c", c), ("context", context) })) return false;
                 androidEventIds.Add(id);
                 androidEventOrder.Enqueue(id);
-                if (androidEventOrder.Count > 1024) androidEventIds.Remove(androidEventOrder.Dequeue());
+                if (androidEventOrder.Count > 4096) androidEventIds.Remove(androidEventOrder.Dequeue());
                 return true;
             }
         }
