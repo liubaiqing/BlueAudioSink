@@ -33,3 +33,4 @@ catch (InvalidDataException) { }
 try { await WireCodec.ReadControlAsync(new MemoryStream(control[..^1]), default); throw new Exception("Truncation accepted"); }
 catch (EndOfStreamException) { }
 Console.WriteLine("PASS BAS2 cross-platform header vector, invalid fields, TCP boundaries and truncation");
+await SessionRegression.Run();

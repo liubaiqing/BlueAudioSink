@@ -1,4 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
-  <ItemGroup><Compile Include="../../src/SinkLite/Core/Bas2/WireCodec.cs" Link="WireCodec.cs" /></ItemGroup>
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>disable</Nullable></PropertyGroup>
+  <ItemGroup><Compile Include="../../src/SinkLite/Core/Bas2/WireCodec.cs" Link="WireCodec.cs" /><Compile Include="../../src/SinkLite/Core/Bas2/ReceiverSession.cs" Link="ReceiverSession.cs" /><Compile Include="../../src/SinkLite/Core/Bas2/ControlServer.cs" Link="ControlServer.cs" /></ItemGroup>
 </Project>
