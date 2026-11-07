@@ -1,5 +1,7 @@
 # Android 实现规格
 
+BAS2 重构目标与验收约束见 [连接层设计](07-bas2-connection-design.md)。应用入口切换前，本页保留当前 BAS1 行为。
+
 视觉、控件和 UI 技术栈遵循[双端界面规范](06-ui-style-guide.md#android-发送端)。本页描述手机端的功能行为与实现约束。
 
 包名 `com.blueaudiosink.sender`，Android 10+，Kotlin/Compose。MainActivity 提供电脑选择、手动 IP、缓冲档位、录音授权和开始/停止；底部显示丢包率和发送时长。普通使用不需要开发者设置或 ADB。
