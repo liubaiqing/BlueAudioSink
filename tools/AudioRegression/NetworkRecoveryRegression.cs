@@ -11,6 +11,23 @@ static class NetworkRecoveryRegression
         Address=IPAddress.Parse(ip),Mask=IPAddress.Parse("255.255.255.0")};
     public static void Run(SinkLite.Platform.Log log,Action<string,Action> Test)
     {
+        Test("UI snapshots stay responsive while physical interface enumeration is blocked",()=>{
+            using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim();
+            int reads = 0;
+            using var controller = new WifiController(log,0,80,200,null,()=>{
+                if (Interlocked.Increment(ref reads) > 1) { entered.Set(); release.Wait(3000); }
+                return new[]{Lan("192.168.0.165")};
+            },legacyTestTransport:true);
+            var refresh = typeof(WifiController).GetMethod("RefreshNetwork",BindingFlags.Instance|BindingFlags.NonPublic);
+            var pending = Task.Run(()=>refresh.Invoke(controller,new object[]{true}));
+            try {
+                Check(entered.Wait(2000),"Background network enumeration did not start");
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                for(int i=0;i<100;i++) Check(controller.Current.LocalAddress=="192.168.0.165","Lost complete cached address");
+                Check(clock.ElapsedMilliseconds<200,"UI snapshots waited for blocked OS enumeration");
+                Check(reads==2,"Reading snapshots enumerated interfaces");
+            } finally { release.Set(); pending.GetAwaiter().GetResult(); }
+        });
         Test("Stale hotspot peer never redirects displayed LAN address through a VPN",()=>{
             Check(!WifiLanAddresses.Eligible(NetworkInterfaceType.Ethernet,"TAP-Windows Adapter V9"),"TAP accepted");
             Check(!WifiLanAddresses.Eligible(NetworkInterfaceType.Ethernet,"Famatech Radmin VPN Ethernet Adapter"),"VPN accepted");

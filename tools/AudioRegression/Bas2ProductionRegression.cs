@@ -22,8 +22,15 @@ internal static class Bas2ProductionRegression
             using var discovery = new UdpClient(new IPEndPoint(IPAddress.Parse(local),0));
             byte[] query = new byte[48]; Random.Shared.NextBytes(query.AsSpan(0,16));
             byte[] packet = WifiTransport.BuildPacket(WifiTransport.TypeIdentityQuery,0,0,0,query);
-            await discovery.SendAsync(packet,new IPEndPoint(IPAddress.Parse(local),45678));
-            using var deadline = new CancellationTokenSource(3000); var found = await discovery.ReceiveAsync(deadline.Token);
+            // UDP discovery is intentionally retried by the app; the local announcement may
+            // consume the per-source rate slot immediately after server startup.
+            UdpReceiveResult found = default;
+            for (int attempt=0;attempt<3;attempt++) {
+                await discovery.SendAsync(packet,new IPEndPoint(IPAddress.Parse(local),45678));
+                using var deadline = new CancellationTokenSource(1200);
+                try { found = await discovery.ReceiveAsync(deadline.Token); break; }
+                catch (OperationCanceledException) when (attempt<2) { }
+            }
             if ((found.Buffer[5]&128)==0 || !found.Buffer.AsSpan(16,16).SequenceEqual(query.AsSpan(0,16))) throw new Exception("BAS2 discovery capability or nonce lost");
         }
         using var client = new TcpClient(); await client.ConnectAsync(IPAddress.Loopback,45678);

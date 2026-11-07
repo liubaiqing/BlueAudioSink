@@ -141,6 +141,10 @@ namespace SinkLite.UI
         private string cachedPreferredName = "选择输出设备";
         private DateTime lastOutputRefresh = DateTime.MinValue;
         private string lastPaintKey = string.Empty;
+        private Task<IReadOnlyList<EndpointInfo>> outputRefreshTask;
+        private Func<IReadOnlyList<EndpointInfo>> readOutputs;
+        private const int OutputRefreshMessage = 0x8062;
+        private volatile bool windowDisposed;
 
         private Win32.RECT dropdownRect;
         private int dropdownRows;
@@ -149,6 +153,7 @@ namespace SinkLite.UI
         {
             this.controller = controller;
             this.log = log;
+            readOutputs = controller.ListPhysicalOutputs;
 
             Settings settings = Settings.Load();
             pageSettings = settings;
@@ -364,12 +369,15 @@ namespace SinkLite.UI
                 return;
             }
 
-            string key = BuildPaintKey();
-            if (!force && key == lastPaintKey)
+            // Input changes already know that pixels changed. Do not poll connection state
+            // (or build its diagnostic key) in the immediate hover feedback path.
+            if (!force)
             {
-                return;
+                string key = BuildPaintKey();
+                if (key == lastPaintKey) return;
+                lastPaintKey = key;
             }
-            lastPaintKey = key;
+            else lastPaintKey = string.Empty;
             Win32.InvalidateRect(hwnd, IntPtr.Zero, false);
         }
 
@@ -465,29 +473,41 @@ namespace SinkLite.UI
 
         private void RefreshOutputCache(bool force)
         {
+            if (outputRefreshTask != null)
+            {
+                if (!outputRefreshTask.IsCompleted) return;
+                try { cachedOutputs = outputRefreshTask.GetAwaiter().GetResult(); }
+                catch { /* Keep the last complete inventory on a transient device error. */ }
+                outputRefreshTask = null;
+                UpdatePreferredOutputName();
+                RequestRepaint(true);
+            }
             if (!force && DateTime.Now - lastOutputRefresh < TimeSpan.FromSeconds(10))
             {
                 return;
             }
 
             lastOutputRefresh = DateTime.Now;
-            try
+            IntPtr target = hwnd;
+            outputRefreshTask = Task.Run(() => readOutputs());
+            _ = outputRefreshTask.ContinueWith(completed => {
+                _ = completed.Exception;
+                if (!windowDisposed) Win32.PostMessage(target, OutputRefreshMessage, IntPtr.Zero, IntPtr.Zero);
+            }, TaskScheduler.Default);
+        }
+
+        private void UpdatePreferredOutputName()
+        {
+            string preferred = null;
+            foreach (EndpointInfo o in cachedOutputs)
             {
-                cachedOutputs = controller.ListPhysicalOutputs();
-                string preferred = null;
-                foreach (EndpointInfo o in cachedOutputs)
+                if (o.Id == controller.PreferredRenderId)
                 {
-                    if (o.Id == controller.PreferredRenderId)
-                    {
-                        preferred = o.Name;
-                        break;
-                    }
+                    preferred = o.Name;
+                    break;
                 }
-                cachedPreferredName = preferred ?? "跟随电脑默认输出";
             }
-            catch
-            {
-            }
+            cachedPreferredName = preferred ?? "跟随电脑默认输出";
         }
 
         // ===== 布局 =====
@@ -791,6 +811,9 @@ namespace SinkLite.UI
             {
                 hoverArea = area;
                 RequestRepaint(true);
+                // WM_PAINT normally waits behind queued mouse input. Present this state now,
+                // while avoiding redraws for movement inside the same hit region.
+                Win32.UpdateWindow(hwnd);
             }
         }
 
@@ -802,6 +825,7 @@ namespace SinkLite.UI
             {
                 hoverArea = AreaNone;
                 RequestRepaint(true);
+                Win32.UpdateWindow(hwnd);
             }
         }
 
@@ -1206,6 +1230,9 @@ namespace SinkLite.UI
 
             switch (msg)
             {
+                case OutputRefreshMessage:
+                    RefreshOutputCache(false);
+                    return IntPtr.Zero;
                 case 0x001A: // WM_SETTINGCHANGE
                     if (pageSettings.Theme == AppTheme.System && hwnd != IntPtr.Zero) ApplyWindowTheme();
                     break;
@@ -2156,6 +2183,7 @@ namespace SinkLite.UI
 
         public void Dispose()
         {
+            windowDisposed = true;
             hotkeyCapture?.Dispose();
             hotkeys?.Dispose();
             volumeInput?.Dispose();

@@ -128,7 +128,12 @@ internal static class Bas2PlaybackRegression
                     await Task.Delay(2);
                 }
             }
-            await Wait(() => receiver.GetSnapshot().Received == 40 && receiver.GetSnapshot().OutputActive);
+            var engine = typeof(PlaybackReceiver).GetField("playback",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(receiver);
+            var outputField = typeof(WifiReceiver).GetField("output",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
+            // Accepted packets can still be in staging/reorder while output is already active.
+            // This fake consumer reads the whole clip at once, so wait for its actual PCM buffer.
+            await Wait(() => receiver.GetSnapshot().Received == 40 && receiver.GetSnapshot().OutputActive &&
+                outputField.GetValue(engine) is AudioOutput output && output.BufferedMs >= pcm.Length/192);
             var player = devices.Last().Player;
             byte[] read = new byte[pcm.Length];
             Check(player.Source.Read(read, 0, read.Length) == read.Length && read.SequenceEqual(pcm), "BAS2 playback changed PCM or mixed old streams");

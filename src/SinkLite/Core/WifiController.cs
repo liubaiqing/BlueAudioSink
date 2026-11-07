@@ -109,6 +109,9 @@ namespace SinkLite.Core
 
         private IWifiReceiver receiver;
         private readonly bool legacyTestTransport;
+        private readonly System.Threading.Timer networkTimer;
+        private int readingNetwork;
+        private bool disposed;
         private System.Threading.Timer offerTimer;
         private bool enabled;
         private string lastError;
@@ -128,6 +131,7 @@ namespace SinkLite.Core
             lanAddresses=this.networkProvider();
             lanSignature=WifiLanAddresses.Signature(lanAddresses);
             localAddress=WifiLanAddresses.Choose(lanAddresses);
+            networkTimer = new System.Threading.Timer(_ => RefreshNetwork(), null, 2000, 2000);
         }
 
         public bool Enabled
@@ -224,8 +228,8 @@ namespace SinkLite.Core
 
         public void PrepareReconnect(string endpoint, string name, long? generation = null)
         {
+            RefreshNetwork();
             if(IPEndPoint.TryParse(endpoint,out var peer)) lock(sync) {
-                RefreshNetworkLocked();
                 if((generation.HasValue && generation.Value!=networkGeneration) || !WifiLanAddresses.OnLink(lanAddresses,peer.Address)) {
                     log.Info("Wifi.ReconnectHintDiscarded",("reason","network changed"));return;
                 }
@@ -233,24 +237,40 @@ namespace SinkLite.Core
             }
         }
 
-        private void RefreshNetworkLocked(bool force = false)
+        private void RefreshNetwork(bool force = false)
         {
-            if(!force && DateTime.UtcNow<localAddressRefreshAt) return;
-            localAddressRefreshAt=DateTime.UtcNow.AddSeconds(2);
-            var current=networkProvider();
-            string signature=WifiLanAddresses.Signature(current);
-            if(signature!=lanSignature) {
-                networkGeneration++;
-                receiver?.ResetNetworkPeers();
-                log.Info("Wifi.LanChanged", ("generation", networkGeneration), ("ipv4Candidates", current.Length));
+            if (System.Threading.Interlocked.CompareExchange(ref readingNetwork, 1, 0) != 0) return;
+            try {
+                lock (sync) {
+                    if (disposed || (!force && DateTime.UtcNow < localAddressRefreshAt)) return;
+                    localAddressRefreshAt = DateTime.UtcNow.AddSeconds(2);
+                }
+                // OS interface enumeration can block. Never hold the snapshot/UI lock here.
+                var current = networkProvider();
+                string signature = WifiLanAddresses.Signature(current);
+                long changedGeneration = -1;
+                lock (sync) {
+                    if (disposed) return;
+                    if (signature != lanSignature) {
+                        networkGeneration++;
+                        if (legacyTestTransport) receiver?.ResetNetworkPeers();
+                        changedGeneration = networkGeneration;
+                    }
+                    lanAddresses = current; lanSignature = signature;
+                    localAddress = WifiLanAddresses.Choose(current);
+                }
+                if (changedGeneration >= 0) log.Info("Wifi.LanChanged", ("generation", changedGeneration), ("ipv4Candidates", current.Length));
             }
-            lanAddresses=current;lanSignature=signature;
-            localAddress=WifiLanAddresses.Choose(current);
+            catch (Exception error) { log.Warn("Wifi.LanRefreshFailed", ("error", error.Message)); }
+            finally { System.Threading.Volatile.Write(ref readingNetwork, 0); }
         }
 
         public bool RefreshDiscovery()
         {
-            lock (sync) { RefreshNetworkLocked(true); return receiver != null && receiver.SendOffer(); }
+            RefreshNetwork(true);
+            IWifiReceiver current;
+            lock (sync) current = receiver;
+            return current != null && current.SendOffer();
         }
 
         public void Stop()
@@ -296,7 +316,6 @@ namespace SinkLite.Core
             IWifiReceiver current;
             lock (sync)
             {
-                RefreshNetworkLocked();
                 if (!enabled)
                 {
                     return;
@@ -332,7 +351,6 @@ namespace SinkLite.Core
                 string error;
                 lock (sync)
                 {
-                    RefreshNetworkLocked();
                     rx = receiver;
                     error = lastError;
                 }
@@ -365,6 +383,8 @@ namespace SinkLite.Core
 
         public void Dispose()
         {
+            lock (sync) disposed = true;
+            networkTimer.Dispose();
             Stop();
         }
     }

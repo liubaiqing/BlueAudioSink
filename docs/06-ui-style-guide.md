@@ -37,6 +37,8 @@ BAS2 连接行为与边界见 [连接层实现](07-bas2-connection-design.md)。
 
 新增控件优先复用 `DrawButton`、`RoundFill`、`RoundBorder`、`Dot`、现有开关、选中行及帮助提示路径。自绘新增交互应明确鼠标、键盘焦点、禁用和命中范围。卡片轮廓保持现有细描边，不通过放大窗口解决信息堆积。
 
+悬停高亮在命中区域变化时立即绘制，不等待帮助提示的550ms计时或周期状态刷新；同一命中区域内移动不重复绘制。鼠标命中、强制重绘和绘制路径不得枚举网卡或播放设备。慢速设备枚举在后台执行，完成后以窗口消息更新缓存；后台网卡刷新不持有界面读取的控制器锁。保持既有双缓冲和抗锯齿，不通过持续刷新或新增过渡动画掩盖延迟。
+
 ## Android 发送端
 
 **技术栈**为 Kotlin、Jetpack Compose、Material 3。主题统一由 [BlueAudioSinkTheme](../android/app/src/main/java/com/blueaudiosink/sender/ui/Theme.kt) 提供，依赖和 SDK 版本以 [app/build.gradle.kts](../android/app/build.gradle.kts) 为准。页面和应用内面板复用 Compose 控件。系统授权、通知和悬浮窗口仍通过 Android 平台 API 接入。界面需求不得自行引入其他 UI 框架。
