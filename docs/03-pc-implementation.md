@@ -65,7 +65,7 @@ Wi-Fi 始终显式打开已选择的端点；仅未设置端点时使用默认�
 dotnet publish src/SinkLite/SinkLite.csproj -c Release -p:Platform=x64 -o artifacts/pc --nologo
 ```
 
-当前 Windows 修复候选为 artifacts/issue-1/BlueAudioSink-0.3.2.exe；正式下载以 GitHub Release 为准。音频协议和消费机制不随托盘状态变化。
+当前 Windows 修复候选为 artifacts/issue-1/BlueAudioSink-0.3.2-beta.1.exe；正式下载以 GitHub Release 为准。音频协议和消费机制不随托盘状态变化。
 
 手机远程音量复用现有软件增益，主线程接收状态通知后更新常规页并保存偏好；网络线程不写配置或操作UI。远程命令只对当前手机且心跳新鲜时生效，修订冲突返回权威值，开启独占置零也递增修订并回传，详见协议文档
 

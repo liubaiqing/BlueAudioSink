@@ -30,7 +30,7 @@ namespace SinkLite.UI
                 Text(hdc,label,fontBody,SecondaryColor,Rect(left+S(12),S(top),left+S(94),S(top+28)));
                 Text(hdc,value,fontBody,TextColor,Rect(left+S(100),S(top),right-S(12),S(top+28)));
             }
-            Row(142,"软件版本",typeof(MainWindow).Assembly.GetName().Version.ToString(3));
+            Row(142,"软件版本",System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(MainWindow).Assembly)?.InformationalVersion.Split('+')[0] ?? typeof(MainWindow).Assembly.GetName().Version.ToString(3));
             Row(176,"开发作者","liubaiqing");
             Row(210,"开源协议","MIT License");
             Text(hdc,"项目地址",fontSmall,SecondaryColor,Rect(left+S(12),S(244),right-S(12),S(264)));

@@ -6,6 +6,8 @@
 
 <p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.1">下载最新版</a> · <a href="README.md">English</a> | 简体中文 · <a href="LICENSE">MIT 开源</a></p>
 
+**电脑端测试版：[0.3.2-beta.1](https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.2-beta.1)**，修复输出设备隔离并增加窗口记忆。手机继续使用 0.3.1；下方默认下载仍为正式版。
+
 **相较 0.2.16：**重构连接与音频路径验证，自动选择 UDP/TCP 传输，改进换网恢复；优化电脑控件响应和手机音量拖动，缓冲档位发送中生效，刷新保留设备列表。[查看更新说明](https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.1)
 
 开发作者：**liubaiqing**。双端运行截图已遮挡设备名称、局域网地址和手机状态信息；设置布局预览由实际绘制代码生成，使用示例设备。

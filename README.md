@@ -6,6 +6,8 @@
 
 **Latest stable release: Windows 0.3.1 / Android 0.3.1 (BAS2).** Update both apps together; Wi-Fi is incompatible with 0.2.x. Wi-Fi uses Android’s standard audio-capture consent; no Shizuku, root, developer options or ADB is required
 
+**Windows test release: [0.3.2-beta.1](https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.2-beta.1).** Fixes output-device isolation and remembers window placement. Android 0.3.1 remains compatible; the stable download below is unchanged.
+
 **Changes since 0.2.16:** verified control and audio paths, automatic UDP/TCP transport selection, improved network-change recovery, more responsive desktop controls and Android volume dragging. Buffer presets apply during sending; refresh keeps the device list. [Release notes](https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.1)
 
 Developed by **liubaiqing**. The apps currently use a Chinese interface; the guides below show which controls to use. The device screenshots are from real devices; settings layout previews are rendered by the application drawing code with example devices. Device names, local addresses, and phone status information are masked.

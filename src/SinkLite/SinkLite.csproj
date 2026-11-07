@@ -27,7 +27,7 @@
     <DebugType>none</DebugType>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <Version>0.3.2</Version>
+    <Version>0.3.2-beta.1</Version>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>

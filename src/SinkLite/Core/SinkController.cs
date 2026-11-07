@@ -143,7 +143,7 @@ namespace SinkLite.Core
         {
             loopCancellation = new CancellationTokenSource();
             loopTask = Task.Run(() => RunLoopAsync(loopCancellation.Token));
-            log.Info("App.Start", ("version", typeof(SinkController).Assembly.GetName().Version?.ToString(3)),
+            log.Info("App.Start", ("version", System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(SinkController).Assembly)?.InformationalVersion.Split('+')[0] ?? typeof(SinkController).Assembly.GetName().Version?.ToString(3)),
                 ("windowsVersion", Environment.OSVersion.Version.ToString()));
         }
 
