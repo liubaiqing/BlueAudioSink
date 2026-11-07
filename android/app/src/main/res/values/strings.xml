@@ -61,6 +61,8 @@
     <!-- 通知 -->
     <string name="notification_channel_name">音频发送</string>
     <string name="notification_channel_desc">显示当前音频采集与发送状态</string>
+    <string name="notification_recovering">等待恢复连接</string>
+    <string name="notification_preparing">正在准备音频</string>
     <string name="notification_title">音频发送中</string>
     <string name="notification_capturing">正在建立采集…</string>
     <string name="notification_streaming">正在向电脑发送音频，点按调节音量</string>

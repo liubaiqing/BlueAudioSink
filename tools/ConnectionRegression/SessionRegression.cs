@@ -86,6 +86,23 @@ internal static class SessionRegression
         await Request(tcpStream, "stop", 4, tcpSession, new { });
         var stale = await Request(tcpStream, "start", uint.MaxValue, tcpSession, new { });
         Check(stale.GetProperty("body").GetProperty("code").GetString() == "StaleRequest", "Old request executed again");
+        var diagnosticsEntered=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDiagnostics=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.ApplicationHandler=async (_,message)=>{
+            diagnosticsEntered.TrySetResult(); await releaseDiagnostics.Task;
+            return new ApplicationReply("diagnosticsAck",new System.Text.Json.Nodes.JsonObject { ["ids"]=new System.Text.Json.Nodes.JsonArray() });
+        };
+        using(var sidecar=new TcpClient()) {
+            await sidecar.ConnectAsync(IPAddress.Loopback,server.ControlPort);
+            await sidecar.GetStream().WriteAsync(ControlMessage.Encode("diagnostics",1,tcpSession,new System.Text.Json.Nodes.JsonObject { ["events"]=new System.Text.Json.Nodes.JsonArray() }));
+            await diagnosticsEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var heartbeat=await Request(tcpStream,"heartbeat",5,tcpSession,new { });
+            Check(heartbeat.GetProperty("type").GetString()=="heartbeatAck","Blocked log write stalled the control connection");
+            releaseDiagnostics.TrySetResult();
+            using var limit=new CancellationTokenSource(2000);
+            var ack=ControlMessage.Parse(await WireCodec.ReadControlAsync(sidecar.GetStream(),limit.Token));
+            Check(ack.Type=="diagnosticsAck","Sidecar did not acknowledge persisted batch");
+        }
         Console.WriteLine("PASS real TCP control, UDP bidirectional probe, epochs, idempotency, source isolation, busy and TCP fallback");
     }
 }

@@ -8,9 +8,18 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.produceState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import com.blueaudiosink.sender.core.SenderUiState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.ContextCompat
@@ -82,8 +91,17 @@ class MainActivity : ComponentActivity() {
                         isAppearanceLightNavigationBars = !dark
                     }
                 }
-                val state by LinkController.state.collectAsState()
+                var page by rememberSaveable { mutableStateOf("main") }
+                val visibleState=remember(page) {
+                    if(page=="main") LinkController.state else LinkController.state.map {
+                        SenderUiState(message=it.message,messageToken=it.messageToken)
+                    }.distinctUntilChanged()
+                }
+                val state by produceState(LinkController.state.value,visibleState) {
+                    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { visibleState.collect { value=it } }
+                }
                 SenderScreen(
+                    page=page, onPageChange={page=it},
                     state = state,
                     onStart = ::handleStart,
                     onStop = {
@@ -108,7 +126,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         // 绑定 45678 属于网络操作，不能在主线程做
         val context = applicationContext
-        Thread { LinkController.startDiscovery(context) }.start()
+        LinkController.startDiscovery(context)
     }
 
     override fun onStop() {

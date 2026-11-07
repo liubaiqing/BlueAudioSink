@@ -64,6 +64,8 @@ internal class SessionCoordinator(
     private var retryCount = 0
     private var lastSuccessfulPath: String? = null
     private var fallbackTcp = false
+    private var pendingApplication: ScheduledFuture<*>? = null
+    private var latestWork: ((SessionConnection)->Unit)? = null
 
     init {
         owner.scheduleWithFixedDelay({
@@ -81,6 +83,19 @@ internal class SessionCoordinator(
     fun application(work: (SessionConnection) -> Unit) {
         val session = snapshot.sessionId
         post { val current = active?.connection; if (session != null && current?.sessionId == session) try { work(current) } catch (error: Exception) { recover(error) } }
+    }
+    fun latestApplication(work: (SessionConnection)->Unit) {
+        val session=snapshot.sessionId
+        post {
+            latestWork=work
+            if(pendingApplication!=null) return@post
+            pendingApplication=owner.schedule({
+                pendingApplication=null
+                val newest=latestWork; latestWork=null
+                val current=active?.connection
+                if(session!=null && current?.sessionId==session && newest!=null) try { newest(current) } catch(error: Exception) { recover(error) }
+            },80,TimeUnit.MILLISECONDS)
+        }
     }
     fun reconnect() = post { if (targetSelected) { release(); begin() } }
 
@@ -248,6 +263,7 @@ internal class SessionCoordinator(
     }
 
     private fun release() {
+        pendingApplication?.cancel(false); pendingApplication=null; latestWork=null
         pcm = null
         attempt = null
         retry?.cancel(false)

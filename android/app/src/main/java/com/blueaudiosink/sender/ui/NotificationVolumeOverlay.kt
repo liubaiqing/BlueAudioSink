@@ -54,7 +54,7 @@ internal class NotificationVolumeOverlay(private val context: Context) {
             setViewTreeLifecycleOwner(viewOwner)
             setViewTreeSavedStateRegistryOwner(viewOwner)
             setContent {
-                val state by LinkController.state.collectAsState()
+                val state by LinkController.volumeState.collectAsState()
                 LaunchedEffect(state.phase) {
                     if (state.phase != LinkPhase.STREAMING) dismiss()
                 }

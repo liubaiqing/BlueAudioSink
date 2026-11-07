@@ -8,6 +8,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -24,15 +26,23 @@ internal fun ReceiverVolumeControl(
 ) {
     val label = stringResource(R.string.pc_receive_volume)
     val ready = state.pcConnected && state.remoteVolumeReady
+    var gesture by remember(state.targetDeviceId,state.volumeConflictToken) { mutableStateOf(VolumeGesture()) }
+    var submitted by remember { mutableStateOf(0L) }
+    LaunchedEffect(ready,state.remoteVolume,gesture.dragging) {
+        gesture=gesture.reconcile(state.remoteVolume,ready)
+    }
+    LaunchedEffect(submitted) { if(submitted>0) { delay(4000); if(!gesture.dragging) gesture=VolumeGesture() } }
+    val shown = gesture.shown(state.remoteVolume)
     Column(modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(label, style = MaterialTheme.typography.titleMedium)
-            Text(state.remoteVolume?.takeIf { ready }?.let { "$it%" } ?: "—",
+            Text(if(ready) "${shown.roundToInt()}%" else "—",
                 color = MaterialTheme.colorScheme.primary)
         }
         Slider(
-            value = (state.remoteVolume?.takeIf { ready } ?: 0).toFloat(),
-            onValueChange = { onVolumeChange(it.roundToInt()) },
+            value = if(ready) shown else 0f,
+            onValueChange = { gesture=gesture.drag(it); onVolumeChange(it.roundToInt()) },
+            onValueChangeFinished = { gesture=gesture.finish(); gesture.draft?.let { onVolumeChange(it.roundToInt()) }; submitted++ },
             valueRange = 0f..100f,
             enabled = ready,
             modifier = Modifier.fillMaxWidth().semantics { contentDescription = label },

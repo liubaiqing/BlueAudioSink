@@ -80,6 +80,8 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SenderScreen(
+    page: String,
+    onPageChange: (String)->Unit,
     state: SenderUiState,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -91,8 +93,7 @@ fun SenderScreen(
     onDismissMessage: () -> Unit,
     onRefreshDiscovery: () -> Unit,
 ) {
-    var page by rememberSaveable { mutableStateOf("main") }
-    val goBack = { page = if (page == "settings") "main" else "settings" }
+    val goBack = { onPageChange(if (page == "settings") "main" else "settings") }
     BackHandler(enabled = page != "main", onBack = goBack)
     val snackbarHostState = remember { SnackbarHostState() }
     val message = state.message
@@ -125,7 +126,7 @@ fun SenderScreen(
                     }
                 },
                 actions = {
-                    if (page == "main") IconButton(onClick = { page = "settings" }) {
+                    if (page == "main") IconButton(onClick = { onPageChange("settings") }) {
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings_title))
                     }
                 },
@@ -139,7 +140,7 @@ fun SenderScreen(
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
         if (page != "main") {
-            SettingsContent(page, Modifier.padding(innerPadding), onSelect = { page = it })
+            SettingsContent(page, Modifier.padding(innerPadding), onSelect = onPageChange)
             return@Scaffold
         }
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
@@ -165,7 +166,7 @@ fun SenderScreen(
                     onRemoveSaved = onRemoveSaved,
                     onRefreshDiscovery = onRefreshDiscovery,
                 )
-                TierSection(state.tier, onTierChange)
+                TierSection(state.tier, state.tierPending, onTierChange)
                 if (state.pcConnected) {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                         ReceiverVolumeControl(
@@ -274,9 +275,9 @@ private fun DeviceSection(
                 Text(stringResource(R.string.action_manual_add))
             }
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = onRefreshDiscovery, modifier = Modifier.size(48.dp)) {
+            IconButton(onClick = onRefreshDiscovery, enabled = !state.discovering, modifier = Modifier.size(48.dp)) {
                 Icon(painter = painterResource(R.drawable.ic_refresh),
-                    contentDescription = stringResource(R.string.action_refresh),
+                    contentDescription = if(state.discovering) "正在刷新" else stringResource(R.string.action_refresh),
                     tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
             }
         }
@@ -443,10 +444,10 @@ private fun DeviceRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TierSection(tier: BufferTier, onTierChange: (BufferTier) -> Unit) {
+private fun TierSection(tier: BufferTier, pending: Boolean, onTierChange: (BufferTier) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            text = stringResource(R.string.tier_title),
+            text = stringResource(R.string.tier_title) + if(pending) " · 应用中" else "",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )

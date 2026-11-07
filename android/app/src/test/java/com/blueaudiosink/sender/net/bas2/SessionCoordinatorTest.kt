@@ -102,6 +102,22 @@ class SessionCoordinatorTest {
             assertEquals(1, attempts.get())
         } finally { session.close() }
     }
+    @Test fun volumeWorkCoalescesToLastIntentAndCannotCrossNewSession() {
+        val session=SessionCoordinator({_,_,_->Fake()},{})
+        val values=java.util.Collections.synchronizedList(mutableListOf<Int>())
+        try {
+            session.networkChanged(listOf(wifi)); session.selectDevice(null,listOf("192.168.0.165"))
+            await { session.snapshot.phase==ConnectionPhase.READY }
+            repeat(100) { value-> session.latestApplication { values.add(value) } }
+            await { values.isNotEmpty() }
+            assertEquals(listOf(99),values.toList())
+            session.latestApplication { values.add(100) }
+            session.disconnect()
+            await { session.snapshot.phase==ConnectionPhase.STOPPED }
+            Thread.sleep(120)
+            assertEquals(listOf(99),values.toList())
+        } finally { session.close() }
+    }
 
     @Test fun unacknowledgedUdpUsesTcpUntilStopThenRetriesUdp() {
         val connections = java.util.Collections.synchronizedList(mutableListOf<Fake>())

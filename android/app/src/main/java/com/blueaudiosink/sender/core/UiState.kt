@@ -26,9 +26,12 @@ data class SenderUiState(
     val pcConnected: Boolean = false,
     val remoteVolume: Int? = null,
     val remoteVolumeReady: Boolean = false,
+    val volumeConflictToken: Long = 0,
     val packetsSent: Long = 0,
     val sendingSeconds: Long = 0,
     val tier: BufferTier = BufferTier.BALANCED,
+    val tierPending: Boolean = false,
+    val discovering: Boolean = false,
     val message: String? = null,
     val messageToken: Long = 0,
 )

@@ -36,6 +36,7 @@ class DiscoveryClient(private val onDevices: (List<DiscoveredDevice>) -> Unit) {
     fun start() {
         if (running) return
         running = true
+        synchronized(lock) { seen.values.toList() }.let(onDevices)
         sweepThread = Thread({ sweepLoop() }, "discovery-ttl").apply {
             isDaemon = true
             start()
@@ -46,7 +47,6 @@ class DiscoveryClient(private val onDevices: (List<DiscoveredDevice>) -> Unit) {
         running = false
         sweepThread?.interrupt()
         sweepThread = null
-        synchronized(lock) { seen.clear() }
     }
 
     /** 收到 OFFER 时由 LanDiscovery 的接收线程调用。 */

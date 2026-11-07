@@ -2,6 +2,7 @@ package com.blueaudiosink.sender.net
 
 /** Transport-independent application callbacks. */
 interface SenderListener {
+    fun onVolumeConflict() {}
     fun onStage(stage: String?, compatible: Boolean) {}
     fun onAudioReceipt(sent: Long, received: Long) {}
     fun onResolving(active: Boolean, error: String?)

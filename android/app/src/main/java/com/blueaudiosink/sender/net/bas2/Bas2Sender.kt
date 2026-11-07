@@ -26,6 +26,16 @@ internal class Bas2Sender(private val context: Context, private val phoneName: (
     private var routeEvidence = ""
     private var volumeEpoch = ""
     private var volumeRevision = 0L
+    private val diagnosticWorker=java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    @Volatile private var diagnosticControl: ControlConnection? = null
+    init { diagnosticWorker.scheduleWithFixedDelay({
+        val current=diagnosticControl
+        val batch=Diagnostics.batch()
+        if(current!=null && batch!=null && opened) runCatching {
+            val ids=current.diagnostics(JSONArray(String(batch.payload,Charsets.UTF_8)))
+            if((0 until ids.length()).map { ids.getString(it) }.toSet().containsAll(batch.ids)) Diagnostics.acknowledge(batch)
+        }
+    },2,2,java.util.concurrent.TimeUnit.SECONDS) }
     fun open(): Boolean {
         if (opened) return true
         return try {
@@ -52,7 +62,7 @@ internal class Bas2Sender(private val context: Context, private val phoneName: (
         } catch (error: Exception) { close(); listener?.onError("局域网初始化失败：${error.message}"); false }
     }
     fun isOpen() = opened
-    fun close() { opened = false; duration.setActive(false); coordinator?.close(); coordinator = null; discovery?.close(); discovery = null; environment?.close(); environment = null }
+    fun close() { opened = false; diagnosticControl=null; diagnosticWorker.shutdownNow(); duration.setActive(false); coordinator?.close(); coordinator = null; discovery?.close(); discovery = null; environment?.close(); environment = null }
     fun selectDevice(id: String?, addresses: List<String>) {
         selectedId = id; selectedAddresses = addresses; currentSession = null; intent.incrementAndGet()
         discovery?.target(id,addresses); coordinator?.selectDevice(id,addresses); discovery?.refresh()
@@ -92,7 +102,7 @@ internal class Bas2Sender(private val context: Context, private val phoneName: (
             }
             lastError = null; listener?.onPing(0,0)
         } else {
-            currentSession = null; intent.incrementAndGet(); listener?.onRemoteVolume(null,false)
+            diagnosticControl=null; currentSession = null; intent.incrementAndGet(); listener?.onRemoteVolume(null,false)
             val error = if (snapshot.phase == ConnectionPhase.FAILED && snapshot.error != lastError) {
                 lastError = snapshot.error
                 when {
@@ -110,31 +120,24 @@ internal class Bas2Sender(private val context: Context, private val phoneName: (
         applyVolume(state)
         listener?.onPing(0,0)
         listener?.onAudioReceipt(control.receiptSent,control.receiptReceived)
-        Diagnostics.batch()?.let { batch ->
-            val ack = try { control.application("diagnostics",JSONObject().put("events",JSONArray(String(batch.payload,Charsets.UTF_8))),"diagnosticsAck") }
-                catch(error: java.io.IOException) {
-                    // A full/unwritable PC log disk is not evidence that the audio path failed.
-                    if (error.message == "BAS2: LogWriteFailed") return@let
-                    throw error
-                }
-            val ids = ack.getJSONArray("ids")
-            if ((0 until ids.length()).map { ids.getString(it) }.toSet().containsAll(batch.ids)) Diagnostics.acknowledge(batch)
-        }
+        diagnosticControl=control
     }
+
     private fun applyVolume(body: JSONObject) {
         volumeEpoch = body.getString("epoch"); volumeRevision = body.getLong("revision")
         listener?.onRemoteVolume(body.getInt("percent"),true)
     }
     fun setRemoteVolume(percent: Int) {
         val version = intent.incrementAndGet()
-        coordinator?.application { connection ->
-            if (version != intent.get() || volumeEpoch.isEmpty()) return@application
+        coordinator?.latestApplication { connection ->
+            if (version != intent.get() || volumeEpoch.isEmpty()) return@latestApplication
             val body = (connection as AndroidSessionConnection).control.application("volumeSet",JSONObject().put("epoch",volumeEpoch)
                 .put("revision",volumeRevision).put("percent",percent.coerceIn(0,100)),"volumeState")
-            if (!body.optBoolean("accepted")) intent.incrementAndGet()
+            if (!body.optBoolean("accepted")) { intent.incrementAndGet(); listener?.onVolumeConflict() }
             applyVolume(body)
         }
     }
+    fun refreshDiscovery() { discovery?.refresh() }
     fun clearTarget() { selectedId = null; selectedAddresses = emptyList(); discovery?.target(null,emptyList()); coordinator?.disconnect() }
     fun suspendIdentity() = coordinator?.reconnect()
     fun hasTarget() = currentSession != null

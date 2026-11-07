@@ -27,9 +27,10 @@ import kotlin.math.abs
  */
 class PcmRecorder(
     private val projection: MediaProjection?,
-    private val tier: BufferTier,
+    tier: BufferTier,
     private val onPacket: (buffer: ByteArray, length: Int, timestampUs: Int, discontinuity: Boolean) -> Unit,
     private val onError: (code: Int) -> Unit,
+    private val onTierApplied: (BufferTier)->Unit = {},
 ) {
 
     companion object {
@@ -50,7 +51,9 @@ class PcmRecorder(
     }
 
     private val packetBytes = PacketCodec.AUDIO_PAYLOAD_SIZE
-    private val capacity = (tier.prefillPackets * 3).coerceAtLeast(8)
+    private val capacity = BufferTier.entries.maxOf { it.prefillPackets } * 3
+    @Volatile private var requestedTier = tier
+    fun setTier(value: BufferTier) { requestedTier=value }
 
     private val ring = ByteArray(capacity * packetBytes)
     private val ringTimestamps = LongArray(capacity)
@@ -287,20 +290,20 @@ class PcmRecorder(
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
 
         // 预填充到档位深度，最多等 300 ms
-        val prefillDeadline = SystemClock.elapsedRealtimeNanos() + PREFILL_TIMEOUT_NS
-        while (running) {
-            val enough = synchronized(lock) { fill >= tier.prefillPackets }
-            if (enough) break
-            if (SystemClock.elapsedRealtimeNanos() >= prefillDeadline) break
-            try {
-                Thread.sleep(2)
-            } catch (_: InterruptedException) {
-                return
-            }
-        }
-
+        var appliedTier: BufferTier? = null
         var nextNs = SystemClock.elapsedRealtimeNanos()
         while (running) {
+            val nextTier=requestedTier
+            if(appliedTier!=nextTier) {
+                val prefillDeadline=SystemClock.elapsedRealtimeNanos()+PREFILL_TIMEOUT_NS
+                while(running && requestedTier==nextTier && synchronized(lock){fill<nextTier.prefillPackets} && SystemClock.elapsedRealtimeNanos()<prefillDeadline) {
+                    try { Thread.sleep(2) } catch(_: InterruptedException) { return }
+                }
+                if(!running) break
+                if(requestedTier!=nextTier) continue
+                appliedTier=nextTier; onTierApplied(nextTier)
+                nextNs=SystemClock.elapsedRealtimeNanos()
+            }
             while (running) {
                 val wait = nextNs - SystemClock.elapsedRealtimeNanos()
                 if (wait <= 0) break

@@ -33,6 +33,7 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
     private var sequence = 0
     private val mediaLock = Any()
     private val resourceLock = Any()
+    private var diagnosticSocket: Socket? = null
     @Volatile private var closed = false
     @Volatile private var sending = false
     @Volatile private var mediaFailure: java.io.IOException? = null
@@ -207,6 +208,20 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
         return response
     }
     fun application(type: String, body: JSONObject, expected: String): JSONObject = request(type, body, expected).getJSONObject("body")
+    fun diagnostics(events: org.json.JSONArray): org.json.JSONArray {
+        check(!closed)
+        val data=route.network?.socketFactory?.createSocket() ?: Socket()
+        try {
+            synchronized(resourceLock) { check(!closed); diagnosticSocket=data }
+            data.soTimeout=2000; data.tcpNoDelay=true
+            data.bind(InetSocketAddress(socket.localAddress,0)); data.connect(InetSocketAddress(route.remoteAddress,route.controlPort),2000)
+            val json=JSONObject().put("type","diagnostics").put("requestId",1).put("sessionId",sessionId).put("body",JSONObject().put("events",events))
+            data.getOutputStream().write(WireCodec.encodeControlPayload(json.toString().toByteArray(Charsets.UTF_8)))
+            val response=JSONObject(String(WireCodec.readControlPayload(data.getInputStream()),Charsets.UTF_8))
+            require(response.getString("sessionId")==sessionId && response.getInt("requestId")==1 && response.getString("type")=="diagnosticsAck")
+            return response.getJSONObject("body").getJSONArray("ids")
+        } finally { data.close(); synchronized(resourceLock) { if(diagnosticSocket===data) diagnosticSocket=null } }
+    }
 
     override fun close() {
         synchronized(resourceLock) {
@@ -216,6 +231,7 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
             runCatching { udp?.close() }
             mediaWriter?.close()
             runCatching { mediaSocket?.close() }
+            runCatching { diagnosticSocket?.close() }
         }
     }
 

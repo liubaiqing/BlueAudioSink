@@ -145,6 +145,21 @@ namespace SinkLite.Core.Bas2
                 using var helloTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
                 helloTimeout.CancelAfter(TimeSpan.FromSeconds(2));
                 var hello = ControlMessage.Parse(await WireCodec.ReadControlAsync(stream, helloTimeout.Token));
+                if(hello.Type=="diagnostics") {
+                    ReceiverPeerSnapshot context;
+                    lock(gate) {
+                        if(!peers.TryGetValue(hello.SessionId,out var parent) ||
+                            parent.Session.Phase is not (ConnectionPhase.Ready or ConnectionPhase.Streaming) ||
+                            !parent.Local.Equals(((IPEndPoint)client.Client.LocalEndPoint).Address) ||
+                            !parent.Remote.Equals(((IPEndPoint)client.Client.RemoteEndPoint).Address)) throw new InvalidDataException("Stale diagnostic session");
+                        context=Snapshot(parent);
+                    }
+                    var handler=ApplicationHandler;
+                    if(handler==null) throw new InvalidDataException("Diagnostics unavailable");
+                    var response=await handler(context,hello).ConfigureAwait(false);
+                    await stream.WriteAsync(ControlMessage.Encode(response.Type,hello.RequestId,hello.SessionId,response.Body),cancellation.Token);
+                    return;
+                }
                 lock (gate)
                 {
                     if (peers.Count >= 16 || hello.Type != "hello") throw new InvalidDataException("Invalid BAS2 hello");

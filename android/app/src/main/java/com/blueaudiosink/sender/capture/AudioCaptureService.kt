@@ -25,6 +25,7 @@ import com.blueaudiosink.sender.MainActivity
 import com.blueaudiosink.sender.R
 import com.blueaudiosink.sender.core.LinkController
 import com.blueaudiosink.sender.ui.NotificationVolumeOverlay
+import kotlinx.coroutines.*
 
 /**
  * 采集前台服务。
@@ -34,6 +35,7 @@ import com.blueaudiosink.sender.ui.NotificationVolumeOverlay
  * 每次开始都需要用户重新确认系统授权（Token 一次性）。
  */
 class AudioCaptureService : Service() {
+    private val serviceScope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
 
     companion object {
         private const val CHANNEL_ID = "capture_status"
@@ -90,6 +92,16 @@ class AudioCaptureService : Service() {
         super.onCreate()
         LinkController.attach(applicationContext)
         createNotificationChannel()
+        serviceScope.launch {
+            LinkController.notificationState.collect { (phase,connected,stage) ->
+                if(recorder!=null) updateNotification(when {
+                    stage!=null -> stage
+                    !connected -> "等待电脑连接"
+                    phase==com.blueaudiosink.sender.core.LinkPhase.STREAMING -> getString(R.string.notification_streaming)
+                    else -> "已连接，等待发送"
+                })
+            }
+        }
     }
 
     private val volumeOverlay by lazy { NotificationVolumeOverlay(this) }
@@ -133,6 +145,7 @@ class AudioCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         releaseCapture()
         super.onDestroy()
     }
@@ -169,6 +182,7 @@ class AudioCaptureService : Service() {
                 LinkController.sendAudio(buffer, length, timestampUs, discontinuity)
             },
             onError = { code -> mainHandler.post { handleRecorderError(code) } },
+            onTierApplied = { applied -> LinkController.tierApplied(applied) },
         )
         if (!pcmRecorder.start()) {
             Log.w(TAG, "PcmRecorder.start() returned false")
@@ -178,6 +192,7 @@ class AudioCaptureService : Service() {
         }
         Log.i(TAG, "recorder started, sending START")
         recorder = pcmRecorder
+        LinkController.tierChanged = pcmRecorder::setTier
         if (!LinkController.startStreaming(deviceName)) { releaseCapture(); stopSelf(); return }
         updateNotification(getString(R.string.notification_streaming))
     }
@@ -207,6 +222,7 @@ class AudioCaptureService : Service() {
 
     /** 只释放采集对象，保留前台服务状态（启动新会话时使用）。 */
     private fun releaseProjection() {
+        LinkController.tierChanged=null
         volumeOverlay.dismiss()
         recorder?.stop()
         recorder = null
@@ -276,7 +292,11 @@ class AudioCaptureService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_audio)
-            .setContentTitle(getString(R.string.notification_title))
+            .setContentTitle(getString(when {
+                !canAdjustVolume -> R.string.notification_preparing
+                !LinkController.state.value.pcConnected || LinkController.state.value.connectionStage!=null -> R.string.notification_recovering
+                else -> R.string.notification_title
+            }))
             .setContentText(text)
             .setOngoing(true)
             .setSilent(true)
