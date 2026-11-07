@@ -5,7 +5,7 @@ Push-Location $repo
 try {
     $out = [IO.Path]::GetFullPath((Join-Path $repo $OutputDirectory))
     New-Item -ItemType Directory -Force $out | Out-Null
-    $version = '0.3.0'
+    $version = ([xml](Get-Content -LiteralPath 'src/SinkLite/SinkLite.csproj' -Raw)).Project.PropertyGroup.Version | Where-Object { $_ }
     dotnet publish src/SinkLite/SinkLite.csproj -c Release -p:Platform=x64 -o (Join-Path $out 'windows') --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Windows publish failed' }
     $gradleOut = (Join-Path $out 'android-build').Replace('\','/').Replace("'","\'")

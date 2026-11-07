@@ -20,8 +20,8 @@ android {
         applicationId = "com.blueaudiosink.sender"
         minSdk = 29
         targetSdk = 34
-        versionCode = 22
-        versionName = "0.3.0"
+        versionCode = 23
+        versionName = "0.3.1"
 
         resourceConfigurations += listOf("zh")
     }

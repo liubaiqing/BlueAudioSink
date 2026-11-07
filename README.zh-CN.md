@@ -4,7 +4,7 @@
 <p align="center">手机的声音，用电脑的耳机或音箱播放。<br/>轻量 Windows 接收端，支持蓝牙与局域网 Wi-Fi。</p>
 **最新正式版：电脑 0.2.16 / Android 0.2.16**，建议双端一起更新，使用手机远程调节电脑接收音量。Wi-Fi 使用 Android 系统音频捕获授权，无需 Shizuku、root、开发者选项或 ADB
 
-**当前源码和本地构建：0.3.0（BAS2）**，必须双端一起升级。新增TCP控制和音频路径验证，UDP不可用时自动使用TCP兼容传输；换网按电脑身份重新寻址，手机诊断汇入电脑日志。该构建尚未上传，下面公开下载链接仍为0.2.16，不能与BAS2混用。
+**当前源码和本地构建：0.3.1（BAS2）**，必须双端一起升级。新增TCP控制和音频路径验证，UDP不可用时自动使用TCP兼容传输；换网按电脑身份重新寻址，手机诊断汇入电脑日志。该构建尚未上传，下面公开下载链接仍为0.2.16，不能与BAS2混用。
 
 <p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.2.16">下载最新版</a> · <a href="README.md">English</a> | 简体中文 · <a href="LICENSE">MIT 开源</a></p>
 

@@ -6,7 +6,7 @@
 
 **Latest stable release: Windows 0.2.16 / Android 0.2.16.** Update both apps for remote receiver volume control. Wi-Fi uses Android’s standard audio-capture consent; no Shizuku, root, developer options or ADB is required
 
-**Current source / local build: 0.3.0 (BAS2).** Update both apps together. TCP control verifies the PC identity and media path; UDP audio automatically falls back to TCP compatibility transport. Address changes are resolved by PC identity, and Android diagnostics join the PC log. This build has not been uploaded; the published links below still point to 0.2.16 and must not be mixed with BAS2.
+**Current source / local build: 0.3.1 (BAS2).** Update both apps together. TCP control verifies the PC identity and media path; UDP audio automatically falls back to TCP compatibility transport. Address changes are resolved by PC identity, and Android diagnostics join the PC log. This build has not been uploaded; the published links below still point to 0.2.16 and must not be mixed with BAS2.
 
 Developed by **liubaiqing**. The apps currently use a Chinese interface; the guides below show which controls to use. The device screenshots are from real devices; settings layout previews are rendered by the application drawing code with example devices. Device names, local addresses, and phone status information are masked.
 

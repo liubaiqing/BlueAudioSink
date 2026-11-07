@@ -29,6 +29,8 @@ UDP45678 继续使用原有16字节发现头（magic BAS1），仅复用 OFFER�
 | diagnostics / diagnosticsAck | events至多6条；电脑异步落盘后返回事件ID数组 |
 | error | UpgradeRequired、IdentityMismatch、Busy、NotReady、StaleRequest等明确错误；超时不自动归因防火墙 |
 
+诊断上传使用独立的短连接：首帧为 `diagnostics`，携带现有就绪/发送会话的sessionId；实际本地与远端地址必须与主控制连接相同。每批最多6条，事件数组UTF-8不超过12000字节，整个帧仍受16KiB上限约束。该连接只允许诊断上传，不能操作音量或开始发送；异步落盘不占用主控制请求锁。跨批与断线重试按eventId去重，诊断失败不关闭健康主会话。
+
 只允许一台手机传音。占用时其他来源的开始与调音被拒绝；电脑明确选择手机可关闭旧来源。旧会话的音量请求不会在新连接重放。
 
 ## 传输验证
