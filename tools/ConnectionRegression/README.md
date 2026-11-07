@@ -40,3 +40,18 @@ adb uninstall com.blueaudiosink.bas2probe
 ```
 
 The installed product package `com.blueaudiosink.sender` is separate. Store addresses, command output and reports under ignored `artifacts`; technical documentation describes repeatable checks rather than historical results.
+
+## Music through the playback pipeline
+
+Prepare a fixed-length 48 kHz, 16-bit, stereo raw PCM clip with a whole number of 960-byte frames. Use exactly the same file for both transports. Copy it to the probe app as `reference.pcm`:
+
+```powershell
+adb push artifacts/bas2/reference.pcm /sdcard/Android/data/com.blueaudiosink.bas2probe/files/reference.pcm
+dotnet run --project tools/AudioRegression -c Release -- --bas2-music-host --reference artifacts/bas2/reference.pcm --seconds 45 --result artifacts/bas2/music-udp.json
+# In a second terminal; substitute the current PC address:
+adb shell am start -n com.blueaudiosink.bas2probe/com.blueaudiosink.sender.net.bas2.Bas2ProbeActivity --es host 192.168.0.165 --ei seconds 10 --ez music true
+```
+
+Repeat the host with `--block-udp` and a distinct result filename. The playback harness fixes software volume at 100%, shared output, initial buffering at 80 ms, and the same 10 ms consumer clock. It uses the production reorder/buffer/gain/output-provider chain with an isolated output device, never the system speaker. Reference and collected output SHA-256, exact byte equality, first mismatch, ingress/accepted packet counts, missing/late frames, queue drops and underruns are reported. The captured output PCM is stored next to the JSON.
+
+The probe waits for STOP acknowledgement and finite output drain before closing control. Closing immediately means disconnect, which intentionally discards pending playback; it is a separate test. Preserve failures, including packet loss and stale-address attempts, instead of replacing them with successful runs. An exact result proves the pre-WASAPI PCM path for that clip and network; it is not an AudioPlaybackCapture or actual sound-card quality test.

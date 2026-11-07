@@ -40,6 +40,7 @@ class Program
         }
         if (args.Length > 0 && args[0] == "--record") { Record(int.Parse(args[1]), args[2]); return; }
         using var log = new Log(Path.Combine(AppContext.BaseDirectory, "logs"));
+        if (args.Length > 0 && args[0] == "--bas2-music-host") { Bas2MusicProbe.Run(log, args).GetAwaiter().GetResult(); return; }
         if(args.Length>0 && args[0]=="--output-flow"){OutputRegression.NativeFlow(log,args.Length>1?args[1]:null);return;}
         if(args.Length>0 && args[0]=="--exclusive-probe"){OutputRegression.HardwareProbe(log,args.Length>1?args[1]:null);return;}
         int passed = 0;
