@@ -2,11 +2,11 @@
 <h1 align="center">BlueAudioSink</h1>
 <p align="center">Chinese name: 蓝音频 · Abbreviation: BAS</p>
 <p align="center">Your phone's audio. Your PC's speakers.<br/>A lightweight Windows receiver with Bluetooth and local-network Wi-Fi modes.</p>
-<p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.2.16">Download latest</a> · English | <a href="README.zh-CN.md">简体中文</a> · <a href="LICENSE">MIT License</a></p>
+<p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.1">Download latest</a> · English | <a href="README.zh-CN.md">简体中文</a> · <a href="LICENSE">MIT License</a></p>
 
-**Latest stable release: Windows 0.2.16 / Android 0.2.16.** Update both apps for remote receiver volume control. Wi-Fi uses Android’s standard audio-capture consent; no Shizuku, root, developer options or ADB is required
+**Latest stable release: Windows 0.3.1 / Android 0.3.1 (BAS2).** Update both apps together; Wi-Fi is incompatible with 0.2.x. Wi-Fi uses Android’s standard audio-capture consent; no Shizuku, root, developer options or ADB is required
 
-**Current source / local build: 0.3.1 (BAS2).** Update both apps together. TCP control verifies the PC identity and media path; UDP audio automatically falls back to TCP compatibility transport. Address changes are resolved by PC identity, and Android diagnostics join the PC log. This build has not been uploaded; the published links below still point to 0.2.16 and must not be mixed with BAS2.
+**Changes since 0.2.16:** verified control and audio paths, automatic UDP/TCP transport selection, improved network-change recovery, more responsive desktop controls and Android volume dragging. Buffer presets apply during sending; refresh keeps the device list. [Release notes](https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.1)
 
 Developed by **liubaiqing**. The apps currently use a Chinese interface; the guides below show which controls to use. The device screenshots are from real devices; settings layout previews are rendered by the application drawing code with example devices. Device names, local addresses, and phone status information are masked.
 
@@ -22,10 +22,10 @@ Developed by **liubaiqing**. The apps currently use a Chinese interface; the gui
 
 | Device | Download | Requirements |
 | --- | --- | --- |
-| PC | [BlueAudioSink-0.2.16.exe](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/BlueAudioSink-0.2.16.exe) | Windows 10 2004+ / Windows 11, x64 |
-| Phone — Wi-Fi only | [BlueAudioSink-Sender-0.2.16.apk](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/BlueAudioSink-Sender-0.2.16.apk) | Android 10+ |
+| PC | [BlueAudioSink-0.3.1.exe](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.3.1/BlueAudioSink-0.3.1.exe) | Windows 10 2004+ / Windows 11, x64 |
+| Phone — Wi-Fi only | [BlueAudioSink-Sender-0.3.1.apk](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.3.1/BlueAudioSink-Sender-0.3.1.apk) | Android 10+ |
 
-Double-click the EXE; no .NET installation is needed. Open the APK on your phone and install it. Android may ask you to allow installation from the app used to open the download. The APK is a Release build signed with a dedicated key. [SHA-256 checksums](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/SHA256SUMS.txt) are available.
+Double-click the EXE; no .NET installation is needed. Open the APK on your phone and install it. Android may ask you to allow installation from the app used to open the download. The APK is a Release build signed with a dedicated key. [SHA-256 checksums](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.3.1/SHA256SUMS.txt) are available.
 
 <details>
 <summary>Already installed the old debug-signed Android APK?</summary>
@@ -190,7 +190,7 @@ dotnet run --project tools/SinkProbe -- endpoints
 dotnet run --project tools/SinkProbe -- meter 10
 ```
 
-Settings: `%LocalAppData%\BlueAudioSink\settings.ini`. Logs: `%LocalAppData%\BlueAudioSink\logs\`.
+Settings: `%LocalAppData%\BlueAudioSink\settings.ini`. Logs default to the `logs` folder beside the EXE; change the folder and retention period in Settings → Connection logs.
 
 ## Repository layout
 

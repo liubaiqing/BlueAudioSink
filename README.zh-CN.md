@@ -2,11 +2,11 @@
 <h1 align="center">蓝音频 · BlueAudioSink</h1>
 <p align="center">英文全称 BlueAudioSink · 简称 BAS</p>
 <p align="center">手机的声音，用电脑的耳机或音箱播放。<br/>轻量 Windows 接收端，支持蓝牙与局域网 Wi-Fi。</p>
-**最新正式版：电脑 0.2.16 / Android 0.2.16**，建议双端一起更新，使用手机远程调节电脑接收音量。Wi-Fi 使用 Android 系统音频捕获授权，无需 Shizuku、root、开发者选项或 ADB
+**最新正式版：电脑 0.3.1 / Android 0.3.1（BAS2）**，必须双端一起升级，Wi-Fi 不与 0.2.x 混用。Wi-Fi 使用 Android 系统音频捕获授权，无需 Shizuku、root、开发者选项或 ADB
 
-**当前源码和本地构建：0.3.1（BAS2）**，必须双端一起升级。新增TCP控制和音频路径验证，UDP不可用时自动使用TCP兼容传输；换网按电脑身份重新寻址，手机诊断汇入电脑日志。该构建尚未上传，下面公开下载链接仍为0.2.16，不能与BAS2混用。
+<p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.1">下载最新版</a> · <a href="README.md">English</a> | 简体中文 · <a href="LICENSE">MIT 开源</a></p>
 
-<p align="center"><a href="https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.2.16">下载最新版</a> · <a href="README.md">English</a> | 简体中文 · <a href="LICENSE">MIT 开源</a></p>
+**相较 0.2.16：**重构连接与音频路径验证，自动选择 UDP/TCP 传输，改进换网恢复；优化电脑控件响应和手机音量拖动，缓冲档位发送中生效，刷新保留设备列表。[查看更新说明](https://github.com/liubaiqing/BlueAudioSink/releases/tag/v0.3.1)
 
 开发作者：**liubaiqing**。双端运行截图已遮挡设备名称、局域网地址和手机状态信息；设置布局预览由实际绘制代码生成，使用示例设备。
 
@@ -22,10 +22,10 @@
 
 | 设备 | 下载 | 系统要求 |
 | --- | --- | --- |
-| 电脑 | [BlueAudioSink-0.2.16.exe](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/BlueAudioSink-0.2.16.exe) | Windows 10 2004+ / Windows 11，x64 |
-| 手机（仅 Wi-Fi 需要） | [BlueAudioSink-Sender-0.2.16.apk](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/BlueAudioSink-Sender-0.2.16.apk) | Android 10 及以上 |
+| 电脑 | [BlueAudioSink-0.3.1.exe](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.3.1/BlueAudioSink-0.3.1.exe) | Windows 10 2004+ / Windows 11，x64 |
+| 手机（仅 Wi-Fi 需要） | [BlueAudioSink-Sender-0.3.1.apk](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.3.1/BlueAudioSink-Sender-0.3.1.apk) | Android 10 及以上 |
 
-电脑双击 EXE 即可，无需安装 .NET。手机打开 APK 安装；若系统询问，允许当前打开文件的应用安装 APK。手机包为独立发布密钥签名的 Release 版本。[文件校验值](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.2.16/SHA256SUMS.txt)随发布提供。
+电脑双击 EXE 即可，无需安装 .NET。手机打开 APK 安装；若系统询问，允许当前打开文件的应用安装 APK。手机包为独立发布密钥签名的 Release 版本。[文件校验值](https://github.com/liubaiqing/BlueAudioSink/releases/download/v0.3.1/SHA256SUMS.txt)随发布提供。
 
 <details>
 <summary>安装过旧测试签名版？点这里</summary>
@@ -182,7 +182,7 @@ dotnet run --project tools/SinkProbe -- endpoints
 dotnet run --project tools/SinkProbe -- meter 10
 ```
 
-配置保存在 `%LocalAppData%\BlueAudioSink\settings.ini`，日志位于 `%LocalAppData%\BlueAudioSink\logs\`。
+配置保存在 `%LocalAppData%\BlueAudioSink\settings.ini`。日志默认位于 EXE 旁的 `logs` 文件夹，可在「设置 → 连接日志」修改位置和保留天数。
 
 ## 项目结构
 
