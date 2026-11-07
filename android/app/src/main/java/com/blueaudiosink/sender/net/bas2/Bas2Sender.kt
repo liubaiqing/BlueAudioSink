@@ -37,7 +37,12 @@ internal class Bas2Sender(private val context: Context, private val phoneName: (
                 if(code == "Bas2.RouteFailed") routeEvidence = fields["error"].orEmpty()
                 Diagnostics.recordContext(code, fields)
             })
-            discovery = LanDiscovery(context, ::offer) { evidence -> Diagnostics.recordContext("Bas2.Discovery", mapOf("evidence" to evidence)) }
+            try {
+                discovery = LanDiscovery(context, ::offer) { evidence -> Diagnostics.recordContext("Bas2.Discovery", mapOf("evidence" to evidence)) }
+            } catch(error: Exception) {
+                Diagnostics.recordContext("Bas2.DiscoveryUnavailable",mapOf("error" to error.toString()))
+                listener?.onError("自动发现暂不可用，仍可选择已保存电脑或手动输入地址连接")
+            }
             environment = NetworkEnvironment(context) { snapshot ->
                 discovery?.update(snapshot); coordinator?.networkChanged(snapshot.routes)
                 Diagnostics.recordContext("Bas2.Network", mapOf("generation" to snapshot.generation.toString(),
@@ -106,7 +111,12 @@ internal class Bas2Sender(private val context: Context, private val phoneName: (
         listener?.onPing(0,0)
         listener?.onAudioReceipt(control.receiptSent,control.receiptReceived)
         Diagnostics.batch()?.let { batch ->
-            val ack = control.application("diagnostics",JSONObject().put("events",JSONArray(String(batch.payload,Charsets.UTF_8))),"diagnosticsAck")
+            val ack = try { control.application("diagnostics",JSONObject().put("events",JSONArray(String(batch.payload,Charsets.UTF_8))),"diagnosticsAck") }
+                catch(error: java.io.IOException) {
+                    // A full/unwritable PC log disk is not evidence that the audio path failed.
+                    if (error.message == "BAS2: LogWriteFailed") return@let
+                    throw error
+                }
             val ids = ack.getJSONArray("ids")
             if ((0 until ids.length()).map { ids.getString(it) }.toSet().containsAll(batch.ids)) Diagnostics.acknowledge(batch)
         }
