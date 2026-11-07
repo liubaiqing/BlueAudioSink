@@ -11,6 +11,9 @@ using System.Text.Json.Nodes;
 
 namespace SinkLite.Core.Bas2
 {
+    internal sealed record ReceiverPeerSnapshot(string SessionId, string InstanceId, string PhoneName,
+        IPAddress LocalAddress, IPAddress RemoteAddress, ConnectionPhase Phase, ulong StreamEpoch, bool UsingTcp, long LastHeartbeatMs);
+
     // All session decisions are serialized by gate. Socket reads never own application state.
     internal sealed class ControlServer : IAsyncDisposable
     {
@@ -37,6 +40,16 @@ namespace SinkLite.Core.Bas2
         public int ControlPort => ((IPEndPoint)controlListener.LocalEndpoint).Port;
         public int MediaPort => ((IPEndPoint)mediaListener.LocalEndpoint).Port;
         public event Action<MediaFrame> AudioReceived;
+        // Handlers only enqueue work; no disk access or playback device operations under the session gate.
+        public event Action<ReceiverPeerSnapshot> PeerChanged;
+
+        private ReceiverPeerSnapshot Snapshot(Peer peer) => new(peer.Session.IdText, peer.Session.InstanceId, peer.Session.PhoneName,
+            peer.Local, peer.Remote, peer.Session.Phase, peer.Session.StreamEpoch, peer.Session.UsingTcp, peer.Session.LastHeartbeatMs);
+
+        public ReceiverPeerSnapshot[] GetPeers()
+        {
+            lock (gate) return peers.Values.Select(Snapshot).ToArray();
+        }
 
         public ControlServer(IPAddress listenAddress, int controlPort, int mediaPort, string identity, string name, bool answerUdpProbes = true)
         {
@@ -129,6 +142,7 @@ namespace SinkLite.Core.Bas2
                         reply = peer.Session.Handle(request, Environment.TickCount64, active == null || active == peer);
                         if (peer.Session.Phase == ConnectionPhase.Streaming) active = peer;
                         else if (active == peer) active = null;
+                        PeerChanged?.Invoke(Snapshot(peer));
                     }
                     await stream.WriteAsync(reply, cancellation.Token);
                     request = ControlMessage.Parse(await WireCodec.ReadControlAsync(stream, cancellation.Token));
@@ -144,6 +158,7 @@ namespace SinkLite.Core.Bas2
                     {
                         peers.Remove(peer.Session.IdText);
                         peer.Session.Close();
+                        PeerChanged?.Invoke(Snapshot(peer));
                         peer.MediaClient?.Dispose();
                         if (active == peer) active = null;
                     }
@@ -201,6 +216,7 @@ namespace SinkLite.Core.Bas2
                         !peer.Remote.Equals(((IPEndPoint)client.Client.RemoteEndPoint).Address) ||
                         !peer.Session.ConfirmTcp(hello.SessionId)) throw new InvalidDataException("Invalid BAS2 media connection");
                     peer.MediaClient = client;
+                    PeerChanged?.Invoke(Snapshot(peer));
                 }
                 await stream.WriteAsync(ControlMessage.Encode("mediaReady", hello.RequestId, peer.Session.IdText, new JsonObject { ["transport"] = "tcp" }), cancellation.Token);
                 byte[] prefix = new byte[4];
@@ -229,6 +245,7 @@ namespace SinkLite.Core.Bas2
                     {
                         peer.MediaClient = null;
                         peer.Session.Close();
+                        PeerChanged?.Invoke(Snapshot(peer));
                         peer.Client.Dispose();
                         if (active == peer) active = null;
                     }

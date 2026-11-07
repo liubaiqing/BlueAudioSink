@@ -87,6 +87,9 @@ namespace SinkLite.Core
         private Thread controlThread;
         private Thread audioThread;
         private Thread playoutThread;
+        private bool externalTransport;
+        private string verifiedStream;
+        private readonly Func<WifiOutputOptions, AudioOutput> createOutput;
         private WifiOutputOptions outputOptions = new WifiOutputOptions();
         private long outputRevision;
         private AudioOutput output;
@@ -240,9 +243,11 @@ namespace SinkLite.Core
         private int rebufferPending;
         private int lastRebufferMs;
 
-        public WifiReceiver(Log log, int controlPort, int audioPort, int bufferBaseMs, int bufferMaxMs, string deviceName, WifiOutputOptions outputOptions = null)
+        public WifiReceiver(Log log, int controlPort, int audioPort, int bufferBaseMs, int bufferMaxMs, string deviceName, WifiOutputOptions outputOptions = null,
+            Func<WifiOutputOptions, AudioOutput> createOutput = null)
         {
             this.log = log;
+            this.createOutput = createOutput ?? (options => new AudioOutput(log, options));
             this.outputOptions = outputOptions ?? new WifiOutputOptions();
             remoteVolume.Update(this.outputOptions.VolumePercent, this.outputOptions.Exclusive);
             this.controlPort = controlPort;
@@ -314,12 +319,18 @@ namespace SinkLite.Core
             }
         }
 
-        public bool Start()
+        public bool Start() => Start(false);
+
+        // Transport adapters own their sockets; this entry starts only the existing playout engine.
+        public bool StartPlaybackOnly() => Start(true);
+
+        private bool Start(bool playbackOnly)
         {
             lock (sync)
             {
                 if (running)
                 {
+                    if (externalTransport != playbackOnly) throw new InvalidOperationException("Stop the engine before changing transport ownership");
                     return true;
                 }
 
@@ -327,9 +338,14 @@ namespace SinkLite.Core
                 Socket audio = null;
                 try
                 {
-                    identity = WifiIdentity.Current;
-                    control = BindSocket(controlPort, true);
-                    audio = BindSocket(audioPort, false);
+                    externalTransport = playbackOnly;
+                    verifiedStream = null;
+                    if (!playbackOnly)
+                    {
+                        identity = WifiIdentity.Current;
+                        control = BindSocket(controlPort, true);
+                        audio = BindSocket(audioPort, false);
+                    }
                     controlSocket = control;
                     audioSocket = audio;
                     running = true;
@@ -344,8 +360,8 @@ namespace SinkLite.Core
                     playoutThread.IsBackground = true;
                     playoutThread.Name = "WifiPlayout";
 
-                    controlThread.Start();
-                    audioThread.Start();
+                    if (!playbackOnly) { controlThread.Start(); audioThread.Start(); }
+                    else { controlThread = null; audioThread = null; }
                     playoutThread.Start();
                     state = SinkState.Armed;
                     detail = "等待手机连接";
@@ -389,6 +405,7 @@ namespace SinkLite.Core
             lock (sync)
             {
                 ClearQueueLocked();
+                verifiedStream = null;
                 release = output;
                 output = null;
                 pending = pendingRelease;
@@ -652,6 +669,51 @@ namespace SinkLite.Core
                 return;
             }
 
+            AcceptPcm(data, WifiTransport.HeaderSize, header, from, now);
+        }
+
+        public void BeginVerifiedStream(string stream, IPEndPoint endpoint, string name)
+        {
+            if (string.IsNullOrEmpty(stream) || endpoint == null) throw new ArgumentException("Missing verified stream");
+            lock (sync)
+            {
+                if (!running || !externalTransport) throw new InvalidOperationException("Playback-only engine is not running");
+                if (verifiedStream == stream) return;
+                verifiedStream = stream;
+                selectedPeer = null;
+                sessionEndpoint = remote = endpoint;
+                remoteName = name;
+                RememberPeerLocked(endpoint, clock.ElapsedTicks, name);
+                BeginSessionLocked(clock.ElapsedTicks, false, 0);
+            }
+        }
+
+        public bool AcceptVerifiedPcm(string stream, byte[] pcm, uint sequence, uint timestampUs, byte flags)
+        {
+            if (pcm == null || pcm.Length != WifiTransport.PayloadBytes || flags > 1) throw new ArgumentException("Invalid verified PCM");
+            lock (sync)
+            {
+                if (!running || !externalTransport || verifiedStream == null || stream != verifiedStream) { stale++; return false; }
+                AcceptPcm(pcm, 0, new WifiTransport.WifiHeader { Type = 1, Flags = flags, Seq = sequence, TimestampUs = timestampUs },
+                    sessionEndpoint ?? remote, clock.ElapsedTicks);
+                return true;
+            }
+        }
+
+        public void EndVerifiedStream(string stream, bool disconnected)
+        {
+            lock (sync)
+            {
+                if (verifiedStream == null || verifiedStream != stream) return;
+                verifiedStream = null; // no queued late PCM may restart a stopped stream
+                if (disconnected) GoArmedLocked("连接已断开，等待手机重连");
+                else HandleStop(default, sessionEndpoint ?? remote, clock.ElapsedTicks);
+            }
+        }
+
+        private void AcceptPcm(byte[] data, int payloadOffset, WifiTransport.WifiHeader header, IPEndPoint from, long now)
+        {
+
             lock (sync)
             {
                 RememberPeerLocked(from, now);
@@ -704,14 +766,14 @@ namespace SinkLite.Core
                 lastAudioTicks = now;
                 lastTimestampUs = header.TimestampUs;
                 // Read-only activity observation for the UI; never changes packet scheduling.
-                for (int sample = WifiTransport.HeaderSize; sample + 1 < length; sample += 2)
+                for (int sample = payloadOffset; sample + 1 < payloadOffset + WifiTransport.PayloadBytes; sample += 2)
                 {
                     short value = (short)(data[sample] | data[sample + 1] << 8);
                     if (value > 32 || value < -32) { lastSignalTicks = now; break; }
                 }
 
                 byte[] rented = ArrayPool<byte>.Shared.Rent(WifiTransport.PayloadBytes);
-                Buffer.BlockCopy(data, WifiTransport.HeaderSize, rented, 0, WifiTransport.PayloadBytes);
+                Buffer.BlockCopy(data, payloadOffset, rented, 0, WifiTransport.PayloadBytes);
                 AudioFrame frame = new AudioFrame();
                 frame.Seq = header.Seq;
                 frame.Data = rented;
@@ -1045,7 +1107,7 @@ namespace SinkLite.Core
         {
             WifiOutputOptions preferences;long revision;
             lock(sync){preferences=outputOptions;revision=outputRevision;}
-            AudioOutput created = new AudioOutput(log,preferences);
+            AudioOutput created = createOutput(preferences);
             bool ok = created.EnsureInitialized();
 
             lock (sync)
@@ -1423,7 +1485,7 @@ namespace SinkLite.Core
                 FlushAggregatesLocked(now);
                 LogStatsLocked(now);
 
-                if (state != SinkState.Faulted && remote != null && lastAnyTicks != 0 &&
+                if (!externalTransport && state != SinkState.Faulted && remote != null && lastAnyTicks != 0 &&
                     now - lastAnyTicks <= TicksFromMs(LockWindowMs) &&
                     (lastPingTicks == 0 || now - lastPingTicks >= TicksFromMs(PingIntervalMs)))
                 {
