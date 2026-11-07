@@ -114,6 +114,8 @@ namespace SinkLite.Core
         private bool disposed;
         private System.Threading.Timer offerTimer;
         private bool enabled;
+        private bool starting;
+        private long lifecycleGeneration;
         private string lastError;
         private DateTime lastOfferLog = DateTime.MinValue;
         private DateTime lastOfferErrorLog = DateTime.MinValue;
@@ -158,43 +160,32 @@ namespace SinkLite.Core
 
         public bool Start()
         {
-            lock (sync)
-            {
-                if (enabled && receiver != null)
-                {
-                    return true;
+            long generation; WifiOutputOptions options; int baseMs,maxMs;
+            lock(sync) {
+                if(disposed) return false;
+                if(enabled && receiver!=null) return true;
+                if(starting) return false;
+                starting=true; generation=++lifecycleGeneration; lastError=null;
+                options=outputOptions; baseMs=bufferBaseMs; maxMs=bufferMaxMs;
+            }
+            IWifiReceiver created=null;
+            try {
+                created=legacyTestTransport ? new WifiReceiver(log,WifiTransport.ControlPort,audioPort,baseMs,maxMs,deviceName,options)
+                    : new Bas2.WifiReceiverFacade(log,WifiTransport.ControlPort,audioPort,baseMs,maxMs,deviceName,options);
+                created.RemoteVolumeChanged+=()=>RemoteVolumeChanged?.Invoke();
+                if(!created.Start()) throw new InvalidOperationException("监听端口不可用");
+                lock(sync) {
+                    if(disposed || lifecycleGeneration!=generation) return false;
+                    receiver=created; created=null; enabled=true;
+                    offerTimer=new System.Threading.Timer(OfferTick,null,2000,2000);
                 }
-
-                lastError = null;
-                IWifiReceiver created = legacyTestTransport ? new WifiReceiver(
-                    log,
-                    WifiTransport.ControlPort,
-                    audioPort,
-                    bufferBaseMs,
-                    bufferMaxMs,
-                    deviceName,outputOptions) : new Bas2.WifiReceiverFacade(log, WifiTransport.ControlPort, audioPort, bufferBaseMs, bufferMaxMs, deviceName, outputOptions);
-
-                created.RemoteVolumeChanged += () => RemoteVolumeChanged?.Invoke();
-                if (!created.Start())
-                {
-                    lastError = "端口 " + WifiTransport.ControlPort + "/" + audioPort + " 绑定失败";
-                    created.Dispose();
-                    return false;
-                }
-
-                receiver = created;
-                enabled = true;
-                offerTimer = new System.Threading.Timer(OfferTick, null, 2000, 2000);
-                OfferTick(null);
-
-                log.Info(
-                    "Wifi.Bind",
-                    ("controlPort", WifiTransport.ControlPort),
-                    ("audioPort", audioPort),
-                    ("bufferBaseMs", bufferBaseMs),
-                    ("bufferMaxMs", bufferMaxMs));
-                log.Info("Wifi.ModeOn", ("mode", "wifi"));
+                log.Info("Wifi.ModeOn",("mode","wifi"));
                 return true;
+            } catch(Exception error) {
+                lock(sync) { if(lifecycleGeneration==generation) lastError="Wi-Fi 启用失败："+error.Message; }
+                log.Error("Wifi.BindFailed",("error",error.Message)); return false;
+            } finally {
+                created?.Dispose(); lock(sync) starting=false;
             }
         }
 
@@ -285,11 +276,12 @@ namespace SinkLite.Core
 
             lock (sync)
             {
-                if (!enabled && receiver == null)
+                if (!enabled && receiver == null && !starting)
                 {
                     return;
                 }
 
+                lifecycleGeneration++;
                 enabled = false;
                 current = receiver;
                 receiver = null;

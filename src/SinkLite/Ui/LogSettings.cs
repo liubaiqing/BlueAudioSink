@@ -13,6 +13,18 @@ namespace SinkLite.UI
         private const int AreaLogDays = 410, AreaLogChoose = 411, AreaLogDefault = 412, AreaLogOpen = 413, AreaLogClear = 414;
         private static readonly int[] LogActions = { AreaLogDays, AreaLogChoose, AreaLogDefault, AreaLogOpen, AreaLogClear };
         private bool logSettings;
+        private bool logBusy;
+        private System.Threading.Tasks.Task logOperation;
+        private void RunLogOperation(Func<string> operation,Action completed=null)
+        {
+            if(logBusy) return;
+            logBusy=true; ShowNotice("正在处理日志…"); RequestRepaint(true);
+            logOperation=System.Threading.Tasks.Task.Run(()=>{
+                string message; bool ok=false;
+                try { message=operation(); ok=true; } catch(Exception error) { message="日志操作失败："+error.Message; }
+                PostUi(()=>{ logBusy=false; if(ok) completed?.Invoke(); if(message!=null) ShowNotice(message); RequestRepaint(true); });
+            });
+        }
 
         private Win32.RECT LogControlRect(Metrics m, int area)
         {
@@ -50,6 +62,7 @@ namespace SinkLite.UI
 
         private void ActivateLogControl(int area)
         {
+            if(logBusy) return;
             try
             {
                 switch (area)
@@ -68,14 +81,12 @@ namespace SinkLite.UI
                         SaveLogDirectory(string.Empty);
                         break;
                     case AreaLogOpen:
-                        Directory.CreateDirectory(log.DirectoryPath);
-                        Process.Start(new ProcessStartInfo(log.DirectoryPath) { UseShellExecute = true });
+                        RunLogOperation(()=>{ Directory.CreateDirectory(log.DirectoryPath); Process.Start(new ProcessStartInfo(log.DirectoryPath) { UseShellExecute=true }); return null; });
                         break;
                     case AreaLogClear:
                         if (Win32.MessageBox(hwnd, "清理当前文件夹中的蓝音频日志？", "连接日志", 0x124) != 6)
                             break;
-                        var result = log.Clear();
-                        ShowNotice(result.Failed == 0 ? $"已清理 {result.Removed} 个日志文件" : $"已清理 {result.Removed} 个，{result.Failed} 个未能清理");
+                        RunLogOperation(()=>{ var result=log.Clear(); return result.Failed==0 ? $"已清理 {result.Removed} 个日志文件" : $"已清理 {result.Removed} 个，{result.Failed} 个未能清理"; });
                         break;
                 }
             }
@@ -87,23 +98,23 @@ namespace SinkLite.UI
 
         private void SaveLogRetention(int days)
         {
-            var settings = Settings.Load();
-            settings.LogRetainDays = days;
-            if (!settings.Save()) { ShowNotice("无法保存日志保留时间"); return; }
-            log.Configure(log.DirectoryPath, days);
-            pageSettings = settings;
-            ShowNotice($"日志保留时间已设为 {days} 天");
+            RunLogOperation(()=>{ log.Configure(log.DirectoryPath,days); return null; },()=>{
+                var settings=pageSettings.Copy(); settings.LogRetainDays=days;
+                QueueSave(settings,$"日志保留时间已保存为 {days} 天");
+            });
         }
 
         private void SaveLogDirectory(string path)
         {
-            string checkedPath = Log.CheckDirectory(string.IsNullOrEmpty(path) ? Log.DefaultDirectory : path);
-            var settings = Settings.Load();
-            settings.LogDirectory = string.IsNullOrEmpty(path) ? string.Empty : checkedPath;
-            if (!settings.Save()) { ShowNotice("无法保存日志位置"); return; }
-            log.Configure(checkedPath, settings.LogRetainDays);
-            pageSettings = settings;
-            ShowNotice("日志位置已更新");
+            string checkedPath=null; int days=pageSettings.LogRetainDays;
+            RunLogOperation(()=>{
+                checkedPath=Log.CheckDirectory(string.IsNullOrEmpty(path) ? Log.DefaultDirectory : path);
+                log.Configure(checkedPath,days); return null;
+            },()=>{
+                if(checkedPath==null) return;
+                var settings=pageSettings.Copy(); settings.LogDirectory=string.IsNullOrEmpty(path) ? string.Empty : checkedPath;
+                QueueSave(settings,"日志位置已保存");
+            });
         }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

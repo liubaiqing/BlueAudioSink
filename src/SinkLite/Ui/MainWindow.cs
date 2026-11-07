@@ -157,6 +157,7 @@ namespace SinkLite.UI
 
             Settings settings = Settings.Load();
             pageSettings = settings;
+            settingsWriter.Completed += SettingsWritten;
             wifi = new WifiController(log, settings.WifiPort, settings.BufferBaseMs, settings.BufferMaxMs, new WifiOutputOptions(settings.WifiExclusive,settings.WifiVolume,settings.PreferredRenderId));
             wifi.RemoteVolumeChanged += () => Win32.PostMessage(hwnd, 0x8051, IntPtr.Zero, IntPtr.Zero);
             wifiMode = startWifi || string.Equals(settings.Mode, "wifi", StringComparison.OrdinalIgnoreCase);
@@ -215,11 +216,11 @@ namespace SinkLite.UI
             if (hwnd == IntPtr.Zero)
             {
                 int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
-                log.Error("Ui.CreateFailed", ("win32Error", error));
+                UiError("Ui.CreateFailed", ("win32Error", error));
                 throw new System.ComponentModel.Win32Exception(error, "创建主窗口失败");
             }
             ApplyCaptionTheme();
-            log.Info("Ui.WindowHandle", ("hwnd", hwnd.ToInt64()));
+            UiLog("Ui.WindowHandle", ("hwnd", hwnd.ToInt64()));
             Win32.SendMessage(hwnd, 0x0080, new IntPtr(1), wc.hIcon); // WM_SETICON, ICON_BIG
             Win32.SendMessage(hwnd, 0x0080, IntPtr.Zero, wc.hIconSm); // ICON_SMALL
             Win32.SetTimer(hwnd, new IntPtr(IdTimer), 1000, IntPtr.Zero);
@@ -228,7 +229,7 @@ namespace SinkLite.UI
             tray = new TrayIcon(hwnd);
             UpdateTray();
             controller.SnapshotChanged += OnSnapshotChanged;
-            log.Info("Ui.Created", ("dpi", (int)dpi), ("scale", scale), ("mode", wifiMode ? "wifi" : "bluetooth"));
+            UiLog("Ui.Created", ("dpi", (int)dpi), ("scale", scale), ("mode", wifiMode ? "wifi" : "bluetooth"));
 
 
         }
@@ -238,7 +239,7 @@ namespace SinkLite.UI
             if(!pageSettings.AutoConnect && !explicitRequest) return;
             if(wifiMode) EnableWifi(false);
             else controller.RequestConnect(string.IsNullOrEmpty(pageSettings.DeviceId) ? null : pageSettings.DeviceId);
-            log.Info("Ui.AutoConnectRequested", ("mode",wifiMode ? "wifi" : "bluetooth"),("explicit",explicitRequest));
+            UiLog("Ui.AutoConnectRequested", ("mode",wifiMode ? "wifi" : "bluetooth"),("explicit",explicitRequest));
         }
 
         /// <summary>从嵌入资源加载窗口图标，避免额外文件依赖。</summary>
@@ -352,7 +353,7 @@ namespace SinkLite.UI
             if (trayStatusKey != key)
             {
                 trayStatusKey = key;
-                log.Info("Ui.TrayStatus", ("registered", ready), ("state", view.State.ToString()), ("text", view.Text));
+                UiLog("Ui.TrayStatus", ("registered", ready), ("state", view.State.ToString()), ("text", view.Text));
             }
             if (!ready && hiddenToTray)
             {
@@ -418,7 +419,7 @@ namespace SinkLite.UI
                     if (result.Status != null)
                     {
                         firewallStatus = result.Status;
-                        log.Info("Wifi.FirewallStatus", ("available", firewallStatus.Available),
+                        UiLog("Wifi.FirewallStatus", ("available", firewallStatus.Available),
                             ("ruleReady", firewallStatus.RuleReady), ("privateActive", firewallStatus.PrivateActive),
                             ("inboundBlocked", firewallStatus.InboundBlocked), ("modifyState", firewallStatus.ModifyState));
                     }
@@ -437,7 +438,7 @@ namespace SinkLite.UI
             int port = wifi.Port;
             IntPtr owner = hwnd;
             firewallChanging = area != AreaFirewallCheck;
-            log.Info("Ui.FirewallRequested", ("operation", area == AreaFirewallCheck ? "query" : area == AreaFirewallEnable ? "enable" : "disable"), ("port", port));
+            UiLog("Ui.FirewallRequested", ("operation", area == AreaFirewallCheck ? "query" : area == AreaFirewallEnable ? "enable" : "disable"), ("port", port));
             firewallMessage = null;
             firewallTask = area == AreaFirewallCheck
                 ? Task.Run(() => new FirewallResult { Status = WifiFirewall.Query(port) })
@@ -616,9 +617,9 @@ namespace SinkLite.UI
 
         private void SetWifiVolume(int value)
         {
-            var preferences = Settings.Load();
+            var preferences = pageSettings.Copy();
             preferences.WifiVolume = value;
-            preferences.Save(); pageSettings = preferences; ApplyOutputPreferences(); RequestRepaint(true);
+            QueueSave(preferences); ApplyOutputPreferences(); RequestRepaint(true);
         }
 
         private void EditWifiVolume()
@@ -761,6 +762,7 @@ namespace SinkLite.UI
 
         private bool IsEnabled(int area)
         {
+            if(area>=AreaLogDays && area<=AreaLogClear) return !logBusy;
             if(area>=AreaHotkeyBind && area<AreaHotkeyBind+4) return true;
             if(area>=AreaHotkeyClear && area<AreaHotkeyClear+4) return !(hotkeys==null ? pageSettings.Hotkeys[area-AreaHotkeyClear] : hotkeys[area-AreaHotkeyClear]).Empty;
             if (modeSwitching) return false;
@@ -869,18 +871,18 @@ namespace SinkLite.UI
                 if (index >= 0 && index < cachedOutputs.Count)
                 {
                     EndpointInfo pick = cachedOutputs[index];
-                    bool changed = controller.SetPreferredRender(pick.Id, pick.Name);
-                    if (changed)
-                    {
-                        pageSettings=Settings.Load();
-                        if(wifiMode && pageSettings.WifiExclusive){pageSettings.WifiVolume=0;pageSettings.Save();}
-                        ApplyOutputPreferences();
-                        cachedPreferredName = pick.Name;
-                        ShowNotice("播放设备已更新");
-                    }
-                    else ShowNotice("播放设备切换失败，请重试");
+                    bool changed=false;
+                    RunConnectionOperation(()=>{
+                        changed=controller.SetPreferredRender(pick.Id,pick.Name,false);
+                        return changed ? "播放设备已更新" : "播放设备切换失败，请重试";
+                    },()=>{
+                        if(!changed) return;
+                        var preferences=pageSettings.Copy(); preferences.PreferredRenderId=pick.Id;
+                        if(wifiMode && preferences.WifiExclusive) preferences.WifiVolume=0;
+                        QueueSave(preferences); ApplyOutputPreferences(); cachedPreferredName=pick.Name;
+                    });
                     lastOutputRefresh = DateTime.MinValue;
-                    log.Info("Ui.OutputPicked", ("endpoint", pick.Name));
+                    UiLog("Ui.OutputPicked", ("endpoint", pick.Name));
                 }
                 dropdownOpen = false;
                 focusArea = AreaOutput;
@@ -951,13 +953,13 @@ namespace SinkLite.UI
                         devicePage = 0;
                     }
                     settingsMode = true;
-                    pageSettings = Settings.Load();
-                    autoStartEnabled = AutoStart.IsEnabled();
+                    pageSettings = pageSettings.Copy();
+                    _ = Task.Run(()=>AutoStart.IsEnabled()).ContinueWith(task=>{ if(task.Status==TaskStatus.RanToCompletion) PostUi(()=>{ autoStartEnabled=task.Result; RequestRepaint(true); }); });
                     if (networkSettings) BeginFirewallOperation(AreaFirewallCheck);
                     RefreshConnectionDevices();
                     focusArea = keyboardFocus ? (aboutSettings ? AreaSettingsAbout : logSettings ? AreaSettingsLogs : hotkeySettings ? AreaSettingsHotkeys : networkSettings ? AreaSettingsNetwork : deviceSettings ? AreaSettingsDevices : AreaSettingsGeneral) : AreaSettings;
                     dropdownOpen = false;
-                    log.Info("Ui.SettingsOpened");
+                    UiLog("Ui.SettingsOpened");
                     return;
 
                 case AreaSettingsBack:
@@ -967,32 +969,28 @@ namespace SinkLite.UI
                 case AreaAutoStart:
                 {
                     bool enabled = !autoStartEnabled;
-                    AutoStart.SetEnabled(enabled);
-                    autoStartEnabled = AutoStart.IsEnabled();
-                    ShowNotice(autoStartEnabled == enabled ? "设置已保存" : "设置未能保存，请重试");
-                    log.Info("Ui.AutoStartToggled", ("enabled", enabled));
+                    bool actual=autoStartEnabled;
+                    RunConnectionOperation(()=>{ AutoStart.SetEnabled(enabled); actual=AutoStart.IsEnabled(); return actual==enabled ? "设置已保存" : "设置未能保存，请重试"; },()=>autoStartEnabled=actual);
                     return;
                 }
 
                 case AreaCloseToTray:
                 {
-                    Settings settings = Settings.Load();
+                    Settings settings = pageSettings.Copy();
                     settings.CloseToTray = !settings.CloseToTray;
-                    settings.Save();
-                    pageSettings = settings;
+                    QueueSave(settings);
                     bool registered = UpdateTray();
                     ShowNotice(settings.CloseToTray ? (registered ? "关闭窗口后将在托盘继续运行" : "托盘暂不可用，关闭时将保留窗口") : "关闭窗口时将彻底退出");
-                    log.Info("Ui.CloseToTrayToggled", ("enabled", settings.CloseToTray));
+                    UiLog("Ui.CloseToTrayToggled", ("enabled", settings.CloseToTray));
                     break;
                 }
                 case AreaAutoConnect:
                 {
-                    Settings settings = Settings.Load();
+                    Settings settings = pageSettings.Copy();
                     settings.AutoConnect = !settings.AutoConnect;
-                    settings.Save();
-                    pageSettings = settings;
-                    ShowNotice("自动连接偏好已保存");
-                    log.Info("Ui.AutoConnectToggled", ("enabled", settings.AutoConnect));
+                    QueueSave(settings);
+                    ShowNotice("自动连接偏好已应用");
+                    UiLog("Ui.AutoConnectToggled", ("enabled", settings.AutoConnect));
                     return;
                 }
 
@@ -1000,7 +998,7 @@ namespace SinkLite.UI
                     EnableWifi(false);
                     return;
                 case AreaWifiDisconnect:
-                    DisconnectWifi("disconnect"); ShowNotice("Wi-Fi 已断开"); UpdateTray();
+                    DisconnectWifi("disconnect");
                     return;
                 case AreaRetryWifi:
                     EnableWifi(true);
@@ -1016,20 +1014,20 @@ namespace SinkLite.UI
                 case AreaBuffer160:
                 {
                     int value = area == AreaBuffer80 ? 80 : area == AreaBuffer120 ? 120 : 160;
-                    Settings preferences = Settings.Load();
+                    Settings preferences = pageSettings.Copy();
                     preferences.BufferBaseMs = value;
                     preferences.BufferMaxMs = Math.Max(value, preferences.BufferMaxMs);
-                    preferences.Save(); pageSettings = preferences;
+                    QueueSave(preferences);
                     wifi.SetBufferBase(value);
-                    ShowNotice("Wi-Fi 缓冲偏好已保存");
+                    ShowNotice("Wi-Fi 缓冲偏好已应用");
                     return;
                 }
 
                 case AreaExclusive:
                 {
-                    var preferences=Settings.Load();
+                    var preferences=pageSettings.Copy();
                     preferences.SetWifiExclusive(!preferences.WifiExclusive);
-                    preferences.Save();pageSettings=preferences;ApplyOutputPreferences();
+                    QueueSave(preferences);ApplyOutputPreferences();
                     ShowNotice(preferences.WifiExclusive ? "独占已请求，音量已静音；请手动调高" : "已请求共享；其他软件无声请重选输出设备", preferences.WifiExclusive ? 3 : 6);
                     return;
                 }
@@ -1039,7 +1037,7 @@ namespace SinkLite.UI
                 case AreaVolumeDown:
                 case AreaVolumeUp:
                 {
-                    SetWifiVolume(Math.Clamp(Settings.Load().WifiVolume+(area==AreaVolumeUp?5:-5),0,100));
+                    SetWifiVolume(Math.Clamp(pageSettings.Copy().WifiVolume+(area==AreaVolumeUp?5:-5),0,100));
                     return;
                 }
 
@@ -1055,18 +1053,18 @@ namespace SinkLite.UI
                 {
                     string deviceId = string.IsNullOrEmpty(pageSettings.DeviceId) ? null : pageSettings.DeviceId;
                     controller.RequestConnect(deviceId);
-                    log.Info("Ui.ConnectClicked", ("device", deviceId ?? "(默认)"));
+                    UiLog("Ui.ConnectClicked", ("device", deviceId ?? "(默认)"));
                     return;
                 }
 
                 case AreaDisconnect:
                     controller.RequestDisconnect();
-                    log.Info("Ui.DisconnectClicked");
+                    UiLog("Ui.DisconnectClicked");
                     return;
 
                 case AreaRefresh:
                     if (!IsEnabled(area)) return;
-                    if (browsingWifiDevices) ShowNotice(wifi.RefreshDiscovery() ? "已广播电脑信息，请在手机端选择这台电脑" : "广播失败，请检查 Wi-Fi 连接");
+                    if (browsingWifiDevices) { ShowNotice("正在刷新设备…"); RunConnectionOperation(()=>wifi.RefreshDiscovery() ? "已广播电脑信息，请在手机端选择这台电脑" : "广播失败，请检查 Wi-Fi 连接"); }
                     else { controller.RequestRefreshDevices(); ShowNotice("正在刷新已配对设备"); }
                     RefreshConnectionDevices();
                     lastOutputRefresh = DateTime.MinValue;
@@ -1086,14 +1084,14 @@ namespace SinkLite.UI
                     }
                     else
                     {
-                        Settings preferences = Settings.Load();
+                        Settings preferences = pageSettings.Copy();
                         preferences.DeviceId = pick.Id;
-                        preferences.Save(); pageSettings = preferences;
+                        QueueSave(preferences);
                         controller.RequestConnect(pick.Id);
                         ShowNotice("正在连接 " + pick.Name);
                     }
                     RefreshConnectionDevices();
-                    log.Info("Ui.DevicePicked", ("mode", wifiMode ? "wifi" : "bluetooth"), ("device", pick.Name));
+                    UiLog("Ui.DevicePicked", ("mode", wifiMode ? "wifi" : "bluetooth"), ("device", pick.Name));
                 }
             }
         }
@@ -1103,30 +1101,30 @@ namespace SinkLite.UI
         /// </summary>
         private void SetMode(bool useWifi)
         {
+            if(modeSwitching) return;
             if(wifiMode==useWifi) { SaveMode(useWifi ? "wifi" : "bluetooth"); return; }
-            modeSwitching=true; RequestRepaint(true); Win32.UpdateWindow(hwnd);
-            try
-            {
-                DisconnectWifi("mode switch"); controller.RequestDisconnect();
-                wifiMode=useWifi; SaveMode(useWifi ? "wifi" : "bluetooth");
-                pageSettings=Settings.Load();
-                ApplyAutoConnect();
-                dropdownOpen=false;
-            }
-            finally { modeSwitching=false; RefreshConnectionDevices(); RequestRepaint(true); }
+            wifiMode=useWifi; SaveMode(useWifi ? "wifi" : "bluetooth"); dropdownOpen=false;
+            var preferences=pageSettings.Copy();
+            RunConnectionOperation(()=>{
+                wifi.Stop("mode switch"); controller.RequestDisconnect();
+                if(!preferences.AutoConnect) return null;
+                if(useWifi) return wifi.Start() ? "Wi-Fi 已启用，等待手机响应" : "Wi-Fi 无法启用，请检查端口占用";
+                controller.RequestConnect(string.IsNullOrEmpty(preferences.DeviceId) ? null : preferences.DeviceId);
+                return "正在连接蓝牙手机";
+            });
         }
 
-        private static void SaveMode(string mode)
+        private void SaveMode(string mode)
         {
             try
             {
-                Settings settings = Settings.Load();
+                Settings settings = pageSettings.Copy();
                 if (string.Equals(settings.Mode, mode, StringComparison.OrdinalIgnoreCase))
                 {
                     return;
                 }
                 settings.Mode = mode;
-                settings.Save();
+                QueueSave(settings);
             }
             catch
             {
@@ -1230,6 +1228,9 @@ namespace SinkLite.UI
 
             switch (msg)
             {
+                case UiWorkMessage:
+                    while(uiWork.TryDequeue(out var work)) work();
+                    return IntPtr.Zero;
                 case OutputRefreshMessage:
                     RefreshOutputCache(false);
                     return IntPtr.Zero;
@@ -1256,9 +1257,9 @@ namespace SinkLite.UI
                     break;
                 case 0x8051:
                     volumeInput?.Cancel();
-                    var volumeSettings = Settings.Load();
+                    var volumeSettings = pageSettings.Copy();
                     volumeSettings.WifiVolume = wifi.Current.VolumePercent;
-                    volumeSettings.Save(); pageSettings = volumeSettings;
+                    QueueSave(volumeSettings);
                     ApplyOutputPreferences(); RequestRepaint(true);
                     return IntPtr.Zero;
                 case Win32.WM_SETCURSOR:
@@ -2184,6 +2185,9 @@ namespace SinkLite.UI
         public void Dispose()
         {
             windowDisposed = true;
+            settingsWriter.Dispose();
+            connectionOperation?.GetAwaiter().GetResult();
+            logOperation?.GetAwaiter().GetResult();
             hotkeyCapture?.Dispose();
             hotkeys?.Dispose();
             volumeInput?.Dispose();

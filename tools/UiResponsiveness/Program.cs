@@ -80,6 +80,16 @@ internal static class Program
             Console.WriteLine(JsonSerializer.Serialize(report));
             Check(deferredPaints==0,"Hover paint remained deferred behind queued input");
             Check(report.p95Ms<100,"Hover response stalled during background enumeration");
+            using var operationEntered=new ManualResetEventSlim(); using var operationRelease=new ManualResetEventSlim();
+            Func<string> slowOperation=()=>{ operationEntered.Set(); operationRelease.Wait(3000); return "test complete"; };
+            start.Restart(); Call(window,"RunConnectionOperation",slowOperation,null);
+            Check(start.ElapsedMilliseconds<200,"Connection teardown blocked the window thread");
+            Check(operationEntered.Wait(2000) && (bool)Get(window,"modeSwitching"),"Connection busy state missing");
+            start.Restart(); SendMessage(hwnd,0,IntPtr.Zero,IntPtr.Zero);
+            Check(start.ElapsedMilliseconds<100,"Window cannot dispatch input during teardown");
+            operationRelease.Set(); ((Task)Get(window,"connectionOperation")).Wait(2000);
+            SendMessage(hwnd,0x8063,IntPtr.Zero,IntPtr.Zero);
+            Check(!(bool)Get(window,"modeSwitching"),"Connection completion did not release controls");
             if(args.Length>0) { Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(args[0]))); File.WriteAllText(args[0],JsonSerializer.Serialize(report,new JsonSerializerOptions { WriteIndented=true })); }
             return 0;
             void Move((int X,int Y) point) => SendMessage(hwnd,0x0200,IntPtr.Zero,new IntPtr(point.X | point.Y<<16));

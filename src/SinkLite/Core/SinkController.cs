@@ -105,7 +105,7 @@ namespace SinkLite.Core
         public bool LockOutput { get; set; } = true;
 
         /// <summary>设置首选输出端点：持久化、重置纠正计数并立即切换一次。</summary>
-        public bool SetPreferredRender(string endpointId, string endpointName)
+        public bool SetPreferredRender(string endpointId, string endpointName, bool persist = true)
         {
             PreferredRenderId = endpointId;
             routeLockAttempts = 0;
@@ -113,7 +113,7 @@ namespace SinkLite.Core
 
             Platform.Settings settings = Platform.Settings.Load();
             settings.PreferredRenderId = endpointId ?? string.Empty;
-            settings.Save();
+            if(persist) settings.Save();
 
             if (route == null || string.IsNullOrEmpty(endpointId))
             {

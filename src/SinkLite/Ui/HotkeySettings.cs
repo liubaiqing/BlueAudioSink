@@ -46,8 +46,8 @@ namespace SinkLite.UI
         private bool SaveHotkey(int index, HotkeyBinding binding)
         {
             if(!hotkeys.Set(index,binding,out var error)) { ShowNotice(error,5); return false; }
-            var settings = Settings.Load(); settings.Hotkeys[index] = binding; settings.Save(); pageSettings = settings;
-            StopHotkeyRecording(); focusArea=AreaHotkeyBind+index; ShowNotice(binding.Empty ? "快捷键已清除" : "快捷键已保存"); RequestRepaint(true); return true;
+            var settings = pageSettings.Copy(); settings.Hotkeys[index] = binding; QueueSave(settings);
+            StopHotkeyRecording(); focusArea=AreaHotkeyBind+index; ShowNotice(binding.Empty ? "快捷键已清除" : "快捷键已应用"); RequestRepaint(true); return true;
         }
         private bool CaptureHotkey(int key, int modifiers)
         {
@@ -69,19 +69,16 @@ namespace SinkLite.UI
         }
         private void DisconnectWifi(string reason)
         {
-            RememberWifiPeer(); wifi.Stop(reason);
+            RememberWifiPeer();
+            RunConnectionOperation(()=>{ wifi.Stop(reason); return "Wi-Fi 已断开"; });
         }
         private void EnableWifi(bool restart)
         {
             controller.RequestDisconnect();
-            if(restart) DisconnectWifi("reconnect");
-            if(wifi.Start())
-            {
-                wifi.PrepareReconnect(reconnectWifiPeer,reconnectWifiName,reconnectWifiGeneration);
-                ShowNotice("Wi-Fi 已启用，等待手机响应");
-            }
-            else ShowNotice("Wi-Fi 无法启用，请检查端口占用");
-            RequestRepaint(true); UpdateTray();
+            RunConnectionOperation(()=>{
+                if(restart) wifi.Stop("reconnect");
+                return wifi.Start() ? "Wi-Fi 已启用，等待手机响应" : "Wi-Fi 无法启用，请检查端口占用";
+            });
         }
         private void ExecuteHotkey(int action)
         {
@@ -89,22 +86,20 @@ namespace SinkLite.UI
             volumeInput?.Cancel();
             if(action==0)
             {
-                controller.RequestDisconnect(); DisconnectWifi("disconnect"); ShowNotice("已断开所有连接");
+                controller.RequestDisconnect(); DisconnectWifi("disconnect");
             }
             else if(action==1)
             {
                 if(wifiMode) EnableWifi(true);
                 else
                 {
-                    controller.RequestDisconnect(); DisconnectWifi("bluetooth reconnect");
-                    var settings=Settings.Load();
-                    controller.RequestConnect(string.IsNullOrEmpty(settings.DeviceId) ? controller.Current.DeviceId : settings.DeviceId);
-                    ShowNotice("正在重新连接蓝牙手机");
+                    var device=string.IsNullOrEmpty(pageSettings.DeviceId) ? controller.Current.DeviceId : pageSettings.DeviceId;
+                    RunConnectionOperation(()=>{ wifi.Stop("bluetooth reconnect"); controller.RequestDisconnect(); controller.RequestConnect(device); return "正在重新连接蓝牙手机"; });
                 }
             }
             else if(wifiMode)
             {
-                SetWifiVolume(Math.Clamp(Settings.Load().WifiVolume+(action==2 ? 5 : -5),0,100));
+                SetWifiVolume(Math.Clamp(pageSettings.Copy().WifiVolume+(action==2 ? 5 : -5),0,100));
                 ShowNotice("Wi-Fi 音量 "+pageSettings.WifiVolume+"%");
             }
             else ShowNotice("音量快捷键仅用于 Wi-Fi 模式");

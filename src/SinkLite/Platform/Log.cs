@@ -26,7 +26,7 @@ namespace SinkLite.Platform
         private readonly Timer cleanupTimer;
         private bool disposed;
         public bool WriteFailed { get; private set; }
-        public string DirectoryPath { get { lock (sync) return directory; } }
+        public string DirectoryPath => Volatile.Read(ref directory);
         private StreamWriter writer;
         private DateTime openedDay;
         private long written;

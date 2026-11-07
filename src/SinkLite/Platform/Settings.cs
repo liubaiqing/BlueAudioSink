@@ -21,7 +21,8 @@ namespace SinkLite.Platform
         public int LogRetainDays { get; set; } = Log.DefaultRetainDays;
         public string LogDirectory { get; set; } = string.Empty;
 
-        public HotkeyBinding[] Hotkeys { get; } = new HotkeyBinding[4];
+        public HotkeyBinding[] Hotkeys { get; private set; } = new HotkeyBinding[4];
+        public Settings Copy() { var copy=(Settings)MemberwiseClone(); copy.Hotkeys=(HotkeyBinding[])Hotkeys.Clone(); return copy; }
 
         public bool WifiExclusive { get; set; }
         public int WifiVolume { get; set; } = 100;

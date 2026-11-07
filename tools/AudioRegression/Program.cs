@@ -294,6 +294,7 @@ class Program
         NetworkRecoveryRegression.Run(log,Test);
         Bas2PlaybackRegression.Run(log,Test);
         Bas2ProductionRegression.Run(log,Test);
+        SettingsWriterRegression.Run(Test);
         Console.WriteLine($"{passed} tests passed");
     }
     [System.Runtime.InteropServices.DllImport("user32.dll")]

@@ -93,14 +93,9 @@ namespace SinkLite.UI
 
         private void SaveTheme(int area)
         {
-            var settings = Settings.Load();
+            var settings = pageSettings.Copy();
             settings.Theme = (AppTheme)(area - AreaThemeSystem);
-            if (!settings.Save())
-            {
-                ShowNotice("无法保存主题设置");
-                return;
-            }
-            pageSettings = settings;
+            QueueSave(settings);
             ApplyWindowTheme();
         }
 
