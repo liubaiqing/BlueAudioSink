@@ -6,6 +6,7 @@ data class SavedDevice(
 ) { val key: String get() = deviceId?.let { "id:$it" } ?: "ip:$ip" }
 
 object DeviceRecords {
+    fun validId(id: String) = id.length == 32 && id.all { it in '0'..'9' || it in 'a'..'f' }
     fun limit(records: List<SavedDevice>): List<SavedDevice> {
         val ordered=records.sortedByDescending { it.lastUsedMs }
         return (ordered.filter { it.deviceId!=null }.take(5)+ordered.filter { it.deviceId==null }.take(5)).sortedByDescending { it.lastUsedMs }

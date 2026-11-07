@@ -2,7 +2,6 @@ package com.blueaudiosink.sender.core
 
 import android.content.Context
 import android.util.Log
-import com.blueaudiosink.sender.net.IdentityResolver
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -26,7 +25,7 @@ class SavedDeviceStore(context: Context) {
         DeviceRecords.limit((0 until array.length()).mapNotNull { i ->
             val o=array.optJSONObject(i) ?: return@mapNotNull null
             val ip=o.optString("ip").trim(); if(ip.isEmpty()) return@mapNotNull null
-            val id=o.optString("deviceId").takeIf(IdentityResolver::validId)
+            val id=o.optString("deviceId").takeIf(DeviceRecords::validId)
             val addresses=o.optJSONArray("addresses")
             val history=(listOf(ip)+(0 until (addresses?.length() ?: 0)).mapNotNull { addresses?.optString(it)?.takeIf { a->a.isNotBlank() } }).distinct().take(8)
             SavedDevice(o.optString("name").ifBlank { ip },ip,o.optInt("port",45679).takeIf { it in 1..65535 } ?: 45679,o.optLong("lastUsed",0),id,history)

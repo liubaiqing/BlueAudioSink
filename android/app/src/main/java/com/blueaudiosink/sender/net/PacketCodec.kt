@@ -1,44 +1,16 @@
 package com.blueaudiosink.sender.net
 
-/**
- * 传输协议 v1 编解码（唯一依据：docs/02-protocol.md）。
- *
- * 统一包头 16 字节，全部小端：
- * | 偏移 | 长度 | 字段        | 类型 |
- * | 0    | 4    | magic "BAS1"| bytes|
- * | 4    | 1    | type        | u8   |
- * | 5    | 1    | flags       | u8   |
- * | 6    | 2    | reserved    | u16  |
- * | 8    | 4    | seq         | u32  |
- * | 12   | 4    | timestampUs | u32  |
- *
- * 音频包：5 ms / 240 帧 / 960 字节 payload，总长 976 字节（IP 层 1004，不分片）。
- */
+/** BAS2 discovery metadata keeps the 16-byte BAS1 header; PCM media uses bas2/WireCodec. */
 object PacketCodec {
 
     const val HEADER_SIZE = 16
 
     // ---- type ----
-    const val TYPE_AUDIO = 1
-    const val TYPE_START = 2
-    const val TYPE_STOP = 3
-    const val TYPE_PING = 4
-    const val TYPE_PONG = 5
     const val TYPE_OFFER = 6
-    const val TYPE_HELLO = 7
-    const val TYPE_VOLUME_GET = 8
-    const val TYPE_VOLUME_SET = 9
-    const val TYPE_VOLUME_STATE = 10
-    const val TYPE_DIAGNOSTICS = 13
-    const val TYPE_DIAGNOSTICS_ACK = 14
-    const val FLAG_DIAGNOSTICS = 2
 
-    // ---- flags ----
-    /** 仅手机置位，表示「内容不连续」（补静音/丢帧），与网络丢包无关。 */
-    const val FLAG_DISCONTINUITY = 0x01
 
     // ---- 端口 ----
-    /** 手机唯一 UDP socket 的本地端口：发现、控制、音频同源。 */
+    /** 发现元数据端口；BAS2控制使用同端口的独立TCP连接。 */
     const val CONTROL_PORT = 45_678
     /** 音频默认目的端口（OFFER 未给出时使用）。 */
     const val DEFAULT_AUDIO_PORT = 45_679
@@ -52,7 +24,6 @@ object PacketCodec {
     const val BYTES_PER_SAMPLE = 2
     const val FRAMES_PER_PACKET = 240
     const val AUDIO_PAYLOAD_SIZE = FRAMES_PER_PACKET * CHANNEL_COUNT * BYTES_PER_SAMPLE // 960
-    const val AUDIO_PACKET_SIZE = HEADER_SIZE + AUDIO_PAYLOAD_SIZE // 976
     const val PACKETS_PER_SECOND = 200
     const val PACKET_INTERVAL_US = 5_000L
 
@@ -95,15 +66,6 @@ object PacketCodec {
 
     fun typeOf(buffer: ByteArray, length: Int): Int =
         if (isValid(buffer, length)) buffer[4].toInt() and 0xFF else -1
-
-    fun flagsOf(buffer: ByteArray, length: Int): Int =
-        if (isValid(buffer, length)) buffer[5].toInt() and 0xFF else 0
-
-    fun timestampOf(buffer: ByteArray, length: Int): Int =
-        if (length >= 16) getIntLE(buffer, 12) else 0
-
-    fun seqOf(buffer: ByteArray, length: Int): Int =
-        if (length >= 12) getIntLE(buffer, 8) else 0
 
     fun findZero(buffer: ByteArray, from: Int, to: Int): Int {
         var i = from
