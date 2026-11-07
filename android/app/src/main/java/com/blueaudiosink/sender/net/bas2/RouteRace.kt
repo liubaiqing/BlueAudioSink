@@ -57,7 +57,7 @@ internal class RouteRace<P : RouteProbe>(private val factory: (PlannedRoute) -> 
             while (pending > 0 && !closed) {
                 val remaining = deadline - System.nanoTime()
                 if (remaining <= 0) break
-                val completed = completion.poll(remaining, TimeUnit.NANOSECONDS) ?: break
+                val completed = completion.poll(minOf(remaining, 100_000_000), TimeUnit.NANOSECONDS) ?: continue
                 pending--
                 try {
                     val selected = completed.get()

@@ -32,8 +32,10 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
     private var epoch = 0L
     private var sequence = 0
     private val mediaLock = Any()
+    private val resourceLock = Any()
     @Volatile private var closed = false
     @Volatile private var sending = false
+    @Volatile private var mediaFailure: java.io.IOException? = null
     var sessionId: String = ""; private set
     var deviceId: String = ""; private set
     var deviceName: String = ""; private set
@@ -41,12 +43,13 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
     var usingTcp: Boolean = false; private set
     val localAddress: InetAddress get() = socket.localAddress
 
-    fun connect(expectedDeviceId: String?, instanceId: String, name: String) {
+    fun connect(expectedDeviceId: String?, instanceId: String, name: String, identityPhase: () -> Unit = {}) {
         try {
             socket.tcpNoDelay = true
             socket.soTimeout = 2000
             socket.bind(InetSocketAddress(route.localAddress, 0))
             socket.connect(InetSocketAddress(route.remoteAddress, route.controlPort), 2000)
+            identityPhase()
             val welcome = request("hello", JSONObject().put("protocol", 2).put("expectedDeviceId", expectedDeviceId.orEmpty())
                 .put("instanceId", instanceId).put("name", name), "welcome")
             val body = welcome.getJSONObject("body")
@@ -63,7 +66,12 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
         check(!closed && sessionBytes.size == 16)
         val challenge = SecureRandom().generateSeed(16)
         val candidate = DatagramSocket(null)
+        var verified = false
         try {
+            synchronized(resourceLock) {
+                check(!closed)
+                udp = candidate // cancellation must also close sockets still being probed
+            }
             route.network?.bindSocket(candidate)
             candidate.bind(InetSocketAddress(socket.localAddress, 0))
             candidate.connect(route.remoteAddress, audioPort)
@@ -78,7 +86,8 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
                     val frame = WireCodec.decodeMedia(response.data.copyOf(response.length))
                     if (frame.type == 3 && frame.sessionId.contentEquals(sessionBytes) && frame.payload.contentEquals(challenge)) {
                         request("pathConfirmed", JSONObject().put("challenge", hex(challenge)), "pathReady")
-                        udp = candidate
+                        check(!closed)
+                        verified = true
                         usingTcp = false
                         return true
                     }
@@ -88,11 +97,16 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
         } catch (_: java.net.SocketException) {
             // A failed UDP path is eligible for independently verified TCP fallback.
         } finally {
-            if (udp !== candidate) candidate.close()
+            if (!verified) {
+                candidate.close()
+                synchronized(resourceLock) { if (udp === candidate) udp = null }
+            }
         }
 
+        check(!closed)
         val data = route.network?.socketFactory?.createSocket() ?: Socket()
         try {
+            synchronized(resourceLock) { check(!closed); mediaSocket = data }
             data.tcpNoDelay = true
             data.soTimeout = 2000
             data.bind(InetSocketAddress(socket.localAddress, 0))
@@ -102,8 +116,13 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
             data.getOutputStream().write(WireCodec.encodeControlPayload(hello.toString().toByteArray(Charsets.UTF_8)))
             val response = JSONObject(String(WireCodec.readControlPayload(data.getInputStream()), Charsets.UTF_8))
             require(response.getString("type") == "mediaReady" && response.getString("sessionId") == sessionId && response.getInt("requestId") == 1)
-            mediaSocket = data
-            mediaWriter = TcpMediaWriter(data) { sending = false }
+            synchronized(resourceLock) {
+                check(!closed)
+                mediaWriter = TcpMediaWriter(data) {
+                    sending = false
+                    mediaFailure = java.io.IOException("BAS2 TCP media stalled or queue exhausted")
+                }
+            }
             usingTcp = true
             return true
         } catch (error: Exception) { data.close(); throw error }
@@ -122,10 +141,14 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
         request("stop", JSONObject(), "stopAck")
     }
 
-    fun heartbeat() { request("heartbeat", JSONObject(), "heartbeatAck") }
+    fun heartbeat() {
+        mediaFailure?.let { throw it }
+        request("heartbeat", JSONObject(), "heartbeatAck")
+    }
 
     fun sendAudio(payload: ByteArray, timestampUs: Int, discontinuity: Boolean) {
         synchronized(mediaLock) {
+            mediaFailure?.let { throw it }
             if (!sending || closed) return
             val packet = WireCodec.encodeMedia(MediaFrame(1, if (discontinuity) 1 else 0,
                 sessionBytes, epoch, sequence++, timestampUs, payload))
@@ -155,12 +178,14 @@ internal class ControlConnection(private val route: RouteCandidate) : Closeable 
     }
 
     override fun close() {
-        closed = true
-        sending = false
-        runCatching { socket.close() }
-        runCatching { udp?.close() }
-        mediaWriter?.close()
-        runCatching { mediaSocket?.close() }
+        synchronized(resourceLock) {
+            closed = true
+            sending = false
+            runCatching { socket.close() }
+            runCatching { udp?.close() }
+            mediaWriter?.close()
+            runCatching { mediaSocket?.close() }
+        }
     }
 
     companion object {
