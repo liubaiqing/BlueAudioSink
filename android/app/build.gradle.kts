@@ -20,8 +20,8 @@ android {
         applicationId = "com.blueaudiosink.sender"
         minSdk = 29
         targetSdk = 34
-        versionCode = 20
-        versionName = "0.2.16"
+        versionCode = 21
+        versionName = "0.2.17-vpn-test"
 
         resourceConfigurations += listOf("zh")
     }

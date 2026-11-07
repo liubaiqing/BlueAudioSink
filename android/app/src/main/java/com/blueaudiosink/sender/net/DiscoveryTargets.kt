@@ -8,14 +8,18 @@ internal object DiscoveryTargets {
     data class Lan(val ip: ByteArray, val prefix: Int)
     fun lans(): List<Lan> = try {
         NetworkInterface.getNetworkInterfaces().toList().filter {
-            it.isUp && !it.isLoopback && !it.isPointToPoint &&
-                !it.name.startsWith("rmnet") && !it.name.startsWith("ccmni")
+            it.isUp && !it.isLoopback && !it.isPointToPoint && eligibleInterface(it.name)
         }.flatMap { nic -> nic.interfaceAddresses.mapNotNull { a ->
             val ip = a.address
             if (ip is Inet4Address && !ip.isLinkLocalAddress && a.networkPrefixLength.toInt() in 1..30)
                 Lan(ip.address,a.networkPrefixLength.toInt()) else null
         } }
     } catch (_: Exception) { emptyList() }
+    internal fun eligibleInterface(name: String): Boolean {
+        val normalized = name.lowercase()
+        return listOf("rmnet", "ccmni", "tun", "tap", "ppp", "ipsec", "wg", "vti", "clat", "dummy")
+            .none(normalized::startsWith)
+    }
     private fun number(b: ByteArray): Long = b.fold(0L) { v, n -> (v shl 8) or (n.toLong() and 255) }
     private fun mask(prefix: Int): Long = (0xffffffffL shl (32-prefix)) and 0xffffffffL
     fun signature(): String = lans().map { "${number(it.ip)}/${it.prefix}" }.sorted().joinToString(",")

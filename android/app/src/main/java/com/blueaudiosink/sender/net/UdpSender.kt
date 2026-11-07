@@ -119,15 +119,17 @@ class UdpSender(context: Context) {
     private var nextOfferDiagnostic = 0L
     private var nextSendDiagnostic = 0L
     private val connectivity=appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-    private val wifiNetworks=mutableSetOf<Long>()
+    private var boundNetwork: Network? = null
+    private var physicalBindingBlocked = false
+    private var vpnSignature = ""
+    private var routeErrorReported = false
     private val networkCallback=object: ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = changed(network.networkHandle,true)
-        override fun onLost(network: Network) = changed(network.networkHandle,false)
-        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = changed(null,false)
-        private fun changed(handle: Long?, available: Boolean) { if(!closed) runCatching {
+        override fun onAvailable(network: Network) = changed()
+        override fun onLost(network: Network) = changed()
+        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = changed()
+        private fun changed() { if(!closed) runCatching {
             controlExecutor.execute { synchronized(sendLock) { if(!closed) {
-                val changed = handle?.let { if(available) wifiNetworks.add(it) else wifiNetworks.remove(it) } ?: false
-                checkNetwork(changed)
+                checkNetwork()
             } } }
         } }
     }
@@ -148,7 +150,11 @@ class UdpSender(context: Context) {
             pingDeadline=SystemClock.elapsedRealtime()+10000;nextHello=0
             listener?.onResolved(device)
         },
-        status = { active, error -> listener?.onResolving(active,error) },
+        status = { active, error ->
+            val message = if (error != null && physicalBindingBlocked)
+                "VPN 禁止局域网直连，请将蓝音频加入 VPN 绕过列表或开启局域网放行" else error
+            listener?.onResolving(active, message)
+        },
     )
     fun selectDevice(id: String?, addresses: List<String>) = synchronized(sendLock) {
         if (audioEnabled && identityVerified) {
@@ -170,10 +176,68 @@ class UdpSender(context: Context) {
         targetHost=null; cachedAddress=null; pingDeadline=0; remoteVolume.reset(false)
     }
     private fun checkNetwork(force: Boolean = false) {
-        val signature=DiscoveryTargets.signature()
-        if (force || signature != networkSignature) {
+        val network = LanNetwork.select(connectivity, boundNetwork)
+        val currentVpn = LanNetwork.vpnSignature(connectivity)
+        val signature = DiscoveryTargets.signature()
+        val routeChanged = network != boundNetwork || currentVpn != vpnSignature || signature != networkSignature
+        if (routeChanged && !replaceRoute(network)) return
+        vpnSignature = currentVpn
+        if (force || routeChanged || signature != networkSignature) {
             Diagnostics.record("Wifi.NetworkChanged", DiscoveryTargets.lans().size.toLong())
             networkSignature=signature; invalidateIdentity(); resolver.restart(SystemClock.elapsedRealtime())
+        }
+    }
+
+    private fun createSocket(network: Network?): DatagramSocket {
+        val candidate = DatagramSocket(null)
+        try {
+            candidate.reuseAddress = true
+            candidate.broadcast = true
+            candidate.soTimeout = 500
+            if (network != null) {
+                try {
+                    network.bindSocket(candidate)
+                    physicalBindingBlocked = false
+                } catch (denied: java.net.SocketException) {
+                    candidate.close()
+                    physicalBindingBlocked = true
+                    Diagnostics.record("Wifi.VpnRouteRestricted")
+                    Log.w(TAG, "VPN or system policy denied physical LAN binding; retaining system routing", denied)
+                    return createSocket(null)
+                } catch (denied: SecurityException) {
+                    candidate.close()
+                    physicalBindingBlocked = true
+                    Diagnostics.record("Wifi.VpnRouteRestricted")
+                    return createSocket(null)
+                }
+            }
+            candidate.bind(InetSocketAddress(PacketCodec.CONTROL_PORT))
+            return candidate
+        } catch (error: Exception) {
+            candidate.close()
+            throw error
+        }
+    }
+
+    private fun replaceRoute(network: Network?): Boolean {
+        try {
+            val replacement = createSocket(network)
+            val previous = socket
+            socket = replacement
+            boundNetwork = network
+            previous?.close()
+            routeErrorReported = false
+            Diagnostics.record("Wifi.LanRoute", if (network == null || physicalBindingBlocked) 0 else 1)
+            return true
+        } catch (error: Exception) {
+            invalidateIdentity()
+            if (!routeErrorReported) {
+                Diagnostics.record("Wifi.LanRouteFailed")
+                listener?.onError("局域网通道不可用，请检查 VPN 是否允许局域网或将蓝音频加入绕过列表")
+                routeErrorReported = true
+            }
+            Log.w(TAG, "Could not bind LAN route", error)
+            return false
         }
     }
     private fun controlTick() = synchronized(sendLock) {
@@ -185,7 +249,11 @@ class UdpSender(context: Context) {
             if(identityVerified && pingDeadline>0) {
                 if(now>=pingDeadline) {
                     Diagnostics.record("Wifi.FirstPingTimeout")
-                    invalidateIdentity();resolver.fail("电脑身份已确认，但连接无回应，请检查电脑防火墙放行");return@synchronized
+                    invalidateIdentity()
+                    resolver.fail(if (physicalBindingBlocked)
+                        "VPN 禁止局域网直连，请将蓝音频加入 VPN 绕过列表或开启局域网放行"
+                        else "电脑身份已确认，但连接无回应，请检查电脑防火墙放行")
+                    return@synchronized
                 }
                 if(now>=nextHello) { nextHello=now+1000;val name=helloName.toByteArray(Charsets.UTF_8);sendLocked(PacketCodec.TYPE_HELLO,0,name,name.size) }
             }
@@ -200,24 +268,31 @@ class UdpSender(context: Context) {
     fun open(): Boolean {
         if (socket != null) return true
         val sock = try {
-            DatagramSocket(null).apply {
-                reuseAddress = true
-                broadcast = true
-                soTimeout = 500
-                bind(InetSocketAddress(PacketCodec.CONTROL_PORT))
+            val network = LanNetwork.select(connectivity, null)
+            createSocket(network).also {
+                boundNetwork = network
+                vpnSignature = LanNetwork.vpnSignature(connectivity)
             }
         } catch (e: Exception) {
             Log.w(TAG, "bind 45678 failed", e)
             Diagnostics.record("Wifi.BindFailed", PacketCodec.CONTROL_PORT.toLong())
-            listener?.onError("端口 45678 被占用")
+            listener?.onError("无法建立局域网通道，请检查端口占用或 VPN 的局域网放行设置")
             return false
         }
         socket = sock
         Diagnostics.record("Wifi.Bound", PacketCodec.CONTROL_PORT.toLong())
+        Diagnostics.record("Wifi.LanRoute", if (boundNetwork == null || physicalBindingBlocked) 0 else 1)
         controlExecutor.scheduleAtFixedRate({ controlTick() }, 0, 100, TimeUnit.MILLISECONDS)
         running = true
         acquireMulticastLock()
-        runCatching { connectivity?.registerNetworkCallback(NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(),networkCallback) }
+        runCatching {
+            connectivity?.registerNetworkCallback(
+                NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET).build(),
+                networkCallback,
+            )
+        }
         receiveThread = Thread({ receiveLoop() }, "udp-recv").apply {
             isDaemon = true
             start()
@@ -353,9 +428,11 @@ class UdpSender(context: Context) {
             } catch (_: SocketTimeoutException) {
                 continue
             } catch (e: Exception) {
+                if (running && sock !== socket) continue
                 if (running) Log.w(TAG, "receive failed", e)
                 break
             }
+            if (sock !== socket) continue
             val length = packet.length
             if (!PacketCodec.isValid(buffer, length)) continue
             when (PacketCodec.typeOf(buffer, length)) {
