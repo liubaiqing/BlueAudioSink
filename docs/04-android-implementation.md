@@ -22,6 +22,10 @@ Wi-Fi 首次确认连接或掉线后重新确认连接时，将手机媒体音�
 
 ## 采集与发送
 
+运行中修改缓冲档位实时交由发送线程应用，不重建MediaProjection或AudioRecord。环形存储固定容纳最大档位的上限；提高档位在发送边界有限等待预填，降低档位不删健康PCM以强追延迟。UI跟踪请求与应用确认，等待期间只显示短状态。内部包计数不逐包驱动页面，发送时长按秒更新。通知仅订阅连接/采集阶段变化，重连时显示恢复状态，不能把授权仍有效误报为正在发送。
+
+设备发现展示使用单个串行执行器与可见性代际管理，Activity前后台不创建裸线程，旧任务不得复活已停止列表。刷新调用现有发现服务的立即查询，不清空设备。日志单所有者后台线程维护7天/2MiB/4096条有界队列，增量计字节，批量持久化；UI记录只排队，批次和导出读取不可变快照。非关键日志上传采用独立控制连接，同实例/同会话代际校验，不能占用调音命令队列或拖慢心跳。
+
 LinkController管理应用状态，Bas2Sender组合NetworkEnvironment、LanDiscovery与SessionCoordinator，ControlConnection负责验证后的TCP控制及UDP/TCP媒体。AudioCaptureService 持有 mediaProjection 前台服务，使用 AudioPlaybackCapture / AudioRecord 获取允许被捕获的应用音频。权限包含录音、屏幕/音频捕获授权，通知权限按系统版本处理。停止/撤销授权必须释放录音和投屏资源。
 
 PcmRecorder 将 PCM 放入环形缓冲并按 5 ms 打包。短读继续攒满 960 字节；环空等待真实采集，不伪造连续序号静音。真实静音照常发送。发送失败消耗源序号并计数；采样时间戳与控制时间戳统一为 BOOTTIME/elapsedRealtimeNanos 时基。缓冲档位用于发送端稳定性取舍，不改变线格式。
